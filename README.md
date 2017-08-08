@@ -29,6 +29,10 @@ The remote monitoring preconfigured solution illustrates how you can perform end
 ### Simulator folder:
   * Simulator (Azure Web Job) that simulates one or more devices that send data to the IoT Hub for testing and troubleshooting
 
+Other useful [IoT Suite documentation](https://azure.microsoft.com/documentation/suites/iot-suite/):
+  * [Frequently asked questions for IoT Suite](https://azure.microsoft.com/documentation/articles/iot-suite-faq/)
+  * [Permissions on the azureiotsuite.com site](https://azure.microsoft.com/documentation/articles/iot-suite-permissions/). This includes instructions for adding co-administrators to your preconfigured solution.
+
 ### EventProcessor folder:
   * Azure Worker Role that hosts an Event Hub **EventProcessorHost** instance to handle the event data from the devices forwarding event data to other back-end services or to the remote monitoring site
 

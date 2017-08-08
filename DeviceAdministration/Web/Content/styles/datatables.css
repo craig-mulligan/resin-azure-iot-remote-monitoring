@@ -5,7 +5,7 @@
  */
 table.dataTable {
   width: 100%;
-  margin: 10px auto;
+  margin: 0px auto 10px auto;
   clear: both;
   border-collapse: separate;
   border-spacing: 0;
@@ -47,7 +47,7 @@ table.dataTable {
   table.dataTable tbody tr {
     background-color: white; }
     table.dataTable tbody tr.selected {
-      background-color: #b0bed9; }
+      background-color: #b2ebfc; }
   table.dataTable tbody th,
   table.dataTable tbody td {
     padding: 8px 10px; }
@@ -93,7 +93,7 @@ table.dataTable {
   table.dataTable.order-column tbody tr.selected > .sorting_3, table.dataTable.display tbody tr.selected > .sorting_1,
   table.dataTable.display tbody tr.selected > .sorting_2,
   table.dataTable.display tbody tr.selected > .sorting_3 {
-    background-color: #acbad4; }
+    background-color: #b2ebfc; }
   table.dataTable.display tbody tr.odd > .sorting_1, table.dataTable.order-column.stripe tbody tr.odd > .sorting_1 {
     background-color: #f1f1f1; }
   table.dataTable.display tbody tr.odd > .sorting_2, table.dataTable.order-column.stripe tbody tr.odd > .sorting_2 {
@@ -381,12 +381,8 @@ table.dataTable {
     border-collapse:collapse;
     }
 
-table.dataTable tbody tr:hover {
+table.dataTable tbody tr:hover:not(.selected) {
     background-color: #f9f9f9; 
-    }
-
-table.dataTable tbody tr.selected {
-    background-color :#f9f9f9; 
     }
 
 #deviceTable thead td.sorting_asc {
@@ -557,10 +553,6 @@ table.dataTable thead {
         border-right:0;
         }
 
-        table.dataTable tbody tr td:nth-child(1) {
-            padding-left:40px;
-            }
-
 
 .dataTables_wrapper .dataTables_info {
     float:left;
@@ -571,8 +563,9 @@ table.dataTable thead {
     }
 
 .dataTables_wrapper .dataTables_paginate {
-    float:right;
+    float:left;
     margin-right:1em;
+    margin-bottom:10px;
     padding-top:0;
     }
 
@@ -582,6 +575,10 @@ table.dataTable thead {
     background-repeat:no-repeat;
     background-position:20px center;
     background-size: 13px 13px;
+    }
+    table.dataTable tbody tr td.table_status {
+        padding-left:40px;
+        text-transform: capitalize;
     }
 
     .table_status.status_false {
@@ -594,6 +591,42 @@ table.dataTable thead {
 
     .table_status.status_pending {
         background-image:url(/Content/img/icon_status_null.svg);
+        }
+
+    .table_status.status_unknown {
+        background-image:url(/Content/img/icon_status_disabled.svg);
+        }
+
+    .table_status.status_enqueued {
+        background-image:url(/Content/img/icon_status_enabled.svg);
+        }
+
+    .table_status.status_running {
+        background-image:url(/Content/img/icon_status_enabled.svg);
+        }
+
+    .table_status.status_completed {
+        background-image:url(/Content/img/icon_status_enabled.svg);
+        }
+
+    .table_status.status_completed_with_errors {
+        background-image:url(/Content/img/icon_status_caution.svg);
+        }
+
+    .table_status.status_failed {
+        background-image:url(/Content/img/icon_status_critical.svg);
+        }
+
+    .table_status.status_canceled {
+        background-image:url(/Content/img/icon_status_disabled.svg);
+        }
+
+    .table_status.status_scheduled {
+        background-image:url(/Content/img/icon_status_enabled.svg);
+        }
+
+    .table_status.status_queued {
+        background-image:url(/Content/img/icon_status_enabled.svg);
         }
 
 .table_alertHistory_issueType{
@@ -617,3 +650,37 @@ table.dataTable thead {
     width: 13px;
     min-height: 19px;
     }
+
+.datatable_checkbox_row {
+    visibility: hidden;
+}
+
+table.dataTable tbody tr:hover .datatable_checkbox_row {
+    visibility:visible;
+}
+
+.datatable_checkbox_all {
+    visibility: hidden;
+}
+
+.datatable_checkbox_show {
+    visibility:visible;
+}
+
+table.dataTable tbody td.image_column {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+.hide_characters {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.table_truncate_with_max_width {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+}

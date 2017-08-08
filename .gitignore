@@ -8,6 +8,8 @@
 *.suo
 *.user
 *.sln.docstates
+*.opendb
+*.patch
 
 # Build results
 [Dd]ebug/
@@ -202,3 +204,8 @@ VendingMachineSample/packages/*
 
 # Merge file remains
 *.orig
+/RemoteMonitoring.VC.db
+/RemoteMonitoring.VC.VC.opendb
+/Simulator/Simulator.WebJob/DMSimulator.exe
+/pingme.txt
+*.powerbirc

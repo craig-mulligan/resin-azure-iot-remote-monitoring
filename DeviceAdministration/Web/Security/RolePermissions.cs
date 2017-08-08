@@ -133,6 +133,19 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
                 ADMIN_ROLE_NAME);
 
             AssignRolesToPermission(Permission.EditResinConfig,
+
+            AssignRolesToPermission(Permission.ViewJobs,
+                NATIVE_CLIENT_ROLE_NAME,
+                READ_ONLY_ROLE_NAME,
+                ADMIN_ROLE_NAME);
+
+            AssignRolesToPermission(Permission.ManageJobs,
+                ADMIN_ROLE_NAME);
+
+            AssignRolesToPermission(Permission.SaveDeviceListColumnsAsGlobal,
+                ADMIN_ROLE_NAME);
+
+            AssignRolesToPermission(Permission.DeleteSuggestedClauses,
                 ADMIN_ROLE_NAME);
         }
 

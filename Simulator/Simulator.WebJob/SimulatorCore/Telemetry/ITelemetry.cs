@@ -22,4 +22,19 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         /// <returns>Task that completes when all tasks are sent</returns>
         Task SendEventsAsync(CancellationToken token, Func<object, Task> sendMessageAsync);
     }
+
+    public interface ITelemetryWithInterval
+    {
+        uint TelemetryIntervalInSeconds { get; set; }
+    }
+
+    public interface ITelemetryWithTemperatureMeanValue
+    {
+        double TemperatureMeanValue { get; set; }
+    }
+
+    public interface ITelemetryFactoryResetSupport
+    {
+        void FactoryReset();
+    }
 }

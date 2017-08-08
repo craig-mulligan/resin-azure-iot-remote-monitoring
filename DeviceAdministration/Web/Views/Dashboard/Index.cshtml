@@ -13,20 +13,20 @@
     'use strict';
 
     var resources = {
-        active: '@Strings.Active',
-        alarm: '@Strings.Alarm',
-        alarmHistory: '@Strings.AlarmHistory',
+        active: '@Html.JavaScriptString(Strings.Active)',
+        alarm: '@Html.JavaScriptString(Strings.Alarm)',
+        alarmHistory: '@Html.JavaScriptString(Strings.AlarmHistory)',
         allClearStatusIcon: '/Content/img/icon_status_all_clear.svg',
         cautionStatusIcon: '/Content/img/icon_status_caution.svg',
-        closed: '@Strings.Closed',
+        closed: '@Html.JavaScriptString(Strings.Closed)',
         criticalStatusIcon: '/Content/img/icon_status_critical.svg',
-        humidity: '@Strings.Humidity',
-        information: '@Strings.Information',
-        telemetryGaugeNumericFormat: '@Strings.TelemetryGaugeNumericFormat',
-        temperature: '@Strings.Temperature',
+        humidity: '@Html.JavaScriptString(Strings.Humidity)',
+        information: '@Html.JavaScriptString(Strings.Information)',
+        telemetryGaugeNumericFormat: '@Html.JavaScriptString(Strings.TelemetryGaugeNumericFormat)',
+        temperature: '@Html.JavaScriptString(Strings.Temperature)',
         alertHistoryType: '',
-        unableToRetrieveAlertsHistoryFromService: '@Strings.UnableToRetrieveAlertsHistoryFromService',
-        unableToRetrieveDeviceTelemetryFromService: '@Strings.UnableToRetrieveDeviceTelemetryFromService'
+        unableToRetrieveAlertsHistoryFromService: '@Html.JavaScriptString(Strings.UnableToRetrieveAlertsHistoryFromService)',
+        unableToRetrieveDeviceTelemetryFromService: '@Html.JavaScriptString(Strings.UnableToRetrieveDeviceTelemetryFromService)'
     };
 </script>
 
@@ -36,10 +36,10 @@
             @{if (!string.IsNullOrWhiteSpace(Model.MapApiQueryKey))
             {
                 <div id="deviceMap" class="dashboard_device_map">
-                    <script charset="UTF-8" type="text/javascript" src="https://ecn.dev.virtualearth.net/mapcontrol/mapcontrol.ashx?v=7.0&s=1"></script>
-                    <script type="text/javascript" src="~/Scripts/IoTHelperScripts.js"></script>
+                    <script charset="UTF-8" type="text/javascript" src="https://www.bing.com/api/maps/mapcontrol?setLang=@CultureHelper.GetCurrentCulture()"></script>
+                    <script type="text/javascript" src="~/Scripts/IoTHelperScripts.js?ver=@Constants.JSVersion"></script>
 
-                    <script src="~/Scripts/Views/Dashboard/MapPane.js"></script>
+                    <script src="~/Scripts/Views/Dashboard/MapPane.js?ver=@Constants.JSVersion"></script>
 
                     <script>
                         resources.alertHistoryType = "dashboard_alert_history--static_height";
@@ -57,6 +57,7 @@
         </div>
         @{
             Html.RenderPartial("_AlertHistory");
+            Html.RenderPartial("_JobIndicators");
         }
     </div>
     @{

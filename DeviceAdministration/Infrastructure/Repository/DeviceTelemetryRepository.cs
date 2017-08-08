@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Models;
-using Microsoft.WindowsAzure.Storage.Blob;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Repository
 {
@@ -19,10 +18,9 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
     /// </summary>
     public class DeviceTelemetryRepository : IDeviceTelemetryRepository
     {
-        private readonly string _telemetryContainerName;
         private readonly string _telemetryDataPrefix;
-        private readonly string _telemetryStoreConnectionString;
         private readonly string _telemetrySummaryPrefix;
+        private readonly IBlobStorageClient _blobStorageManager;
 
         /// <summary>
         /// Initializes a new instance of the DeviceTelemetryRepository class.
@@ -31,17 +29,18 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
         /// The IConfigurationProvider implementation with which to initialize 
         /// the new instance.
         /// </param>
-        public DeviceTelemetryRepository(IConfigurationProvider configProvider)
+        public DeviceTelemetryRepository(IConfigurationProvider configProvider, IBlobStorageClientFactory blobStorageClientFactory)
         {
             if (configProvider == null)
             {
                 throw new ArgumentNullException("configProvider");
             }
 
-            _telemetryContainerName = configProvider.GetConfigurationSettingValue("TelemetryStoreContainerName");
+            string telemetryContainerName = configProvider.GetConfigurationSettingValue("TelemetryStoreContainerName");
             _telemetryDataPrefix = configProvider.GetConfigurationSettingValue("TelemetryDataPrefix");
-            _telemetryStoreConnectionString = configProvider.GetConfigurationSettingValue("device.StorageConnectionString");
+            string telemetryStoreConnectionString = configProvider.GetConfigurationSettingValue("device.StorageConnectionString");
             _telemetrySummaryPrefix = configProvider.GetConfigurationSettingValue("TelemetrySummaryPrefix");
+            _blobStorageManager = blobStorageClientFactory.CreateClient(telemetryStoreConnectionString, telemetryContainerName);
         }
 
         /// <summary>
@@ -59,41 +58,18 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
         /// </returns>
         public async Task<IEnumerable<DeviceTelemetryModel>> LoadLatestDeviceTelemetryAsync(
             string deviceId,
+            IList<DeviceTelemetryFieldModel> telemetryFields,
             DateTime minTime)
         {
             IEnumerable<DeviceTelemetryModel> result = new DeviceTelemetryModel[0];
-
-            CloudBlobContainer container =
-                await BlobStorageHelper.BuildBlobContainerAsync(this._telemetryStoreConnectionString, _telemetryContainerName);
-
-            IEnumerable<IListBlobItem> blobs =
-                await BlobStorageHelper.LoadBlobItemsAsync(
-                    async (token) =>
-                    {
-                        return await container.ListBlobsSegmentedAsync(
-                            _telemetryDataPrefix,
-                            true,
-                            BlobListingDetails.None,
-                            null,
-                            token,
-                            null,
-                            null);
-                    });
-
-            blobs = blobs.OrderByDescending(t => BlobStorageHelper.ExtractBlobItemDate(t));
-
-            CloudBlockBlob blockBlob;
             IEnumerable<DeviceTelemetryModel> blobModels;
-            foreach (IListBlobItem blob in blobs)
-            {
-                if ((blockBlob = blob as CloudBlockBlob) == null)
-                {
-                    continue;
-                }
 
+            var telemetryBlobReader = await _blobStorageManager.GetReader(_telemetryDataPrefix, minTime);
+            foreach (var telemetryStream in telemetryBlobReader)
+            {
                 try
                 {
-                    blobModels = await LoadBlobTelemetryModelsAsync(blockBlob);
+                    blobModels = LoadBlobTelemetryModels(telemetryStream.Data, telemetryFields);
                 }
                 catch
                 {
@@ -120,11 +96,6 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                 }
 
                 result = result.Concat(blobModels);
-
-                if (preFilterCount != blobModels.Count())
-                {
-                    break;
-                }
             }
 
             if (!string.IsNullOrEmpty(deviceId))
@@ -155,52 +126,13 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
             DateTime? minTime)
         {
             DeviceTelemetrySummaryModel summaryModel = null;
-
-            CloudBlobContainer container =
-                await BlobStorageHelper.BuildBlobContainerAsync(
-                    this._telemetryStoreConnectionString,
-                    _telemetryContainerName);
-
-            IEnumerable<IListBlobItem> blobs =
-                await BlobStorageHelper.LoadBlobItemsAsync(
-                    async (token) =>
-                    {
-                        return await container.ListBlobsSegmentedAsync(
-                            _telemetrySummaryPrefix,
-                            true,
-                            BlobListingDetails.None,
-                            null,
-                            token,
-                            null,
-                            null);
-                    });
-
-            blobs = blobs.OrderByDescending(t => BlobStorageHelper.ExtractBlobItemDate(t));
-
             IEnumerable<DeviceTelemetrySummaryModel> blobModels;
-            CloudBlockBlob blockBlob;
-
-            foreach (IListBlobItem blob in blobs)
+            var telemetryBlobReader = await _blobStorageManager.GetReader(_telemetrySummaryPrefix, minTime);
+            foreach (var telemetryStream in telemetryBlobReader)
             {
-                if ((blockBlob = blob as CloudBlockBlob) == null)
-                {
-                    continue;
-                }
-
-                // Translate LastModified to local time zone.  DateTimeOffsets 
-                // don't do this automatically.  This is for equivalent behavior 
-                // with parsed DateTimes.
-                if (minTime.HasValue &&
-                    (blockBlob.Properties != null) &&
-                    blockBlob.Properties.LastModified.HasValue &&
-                    (blockBlob.Properties.LastModified.Value.LocalDateTime < minTime.Value))
-                {
-                    break;
-                }
-
                 try
                 {
-                    blobModels = await LoadBlobTelemetrySummaryModelsAsync(blockBlob);
+                    blobModels = LoadBlobTelemetrySummaryModels(telemetryStream.Data, telemetryStream.LastModifiedTime);
                 }
                 catch
                 {
@@ -229,189 +161,187 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
             return summaryModel;
         }
 
-        private async static Task<List<DeviceTelemetryModel>> LoadBlobTelemetryModelsAsync(CloudBlockBlob blob)
+        private static List<DeviceTelemetryModel> LoadBlobTelemetryModels(Stream stream, IList<DeviceTelemetryFieldModel> telemetryFields)
         {
-            Debug.Assert(blob != null, "blob is a null reference.");
+            Debug.Assert(stream != null, "stream is a null reference.");
 
             List<DeviceTelemetryModel> models = new List<DeviceTelemetryModel>();
 
-            TextReader reader = null;
-            MemoryStream stream = null;
             try
             {
-                stream = new MemoryStream();
-                await blob.DownloadToStreamAsync(stream);
                 stream.Position = 0;
-                reader = new StreamReader(stream);
-
-                IEnumerable<StrDict> strdicts = ParsingHelper.ParseCsv(reader).ToDictionaries();
-                DeviceTelemetryModel model;
-                string str;
-                double number;
-                foreach (StrDict strdict in strdicts)
+                using (var reader = new StreamReader(stream))
                 {
-                    model = new DeviceTelemetryModel();
-
-                    if (strdict.TryGetValue("DeviceId", out str))
+                    IEnumerable<StrDict> strdicts = ParsingHelper.ParseCsv(reader).ToDictionaries();
+                    DeviceTelemetryModel model;
+                    string str;
+                    foreach (StrDict strdict in strdicts)
                     {
-                        model.DeviceId = str;
-                    }
+                        model = new DeviceTelemetryModel();
 
-                    if (strdict.TryGetValue("ExternalTemperature", out str) &&
-                        double.TryParse(
-                            str,
-                            NumberStyles.Float,
+                        if (strdict.TryGetValue("deviceid", out str))
+                        {
+                            model.DeviceId = str;
+                        }
+
+                        model.Timestamp = DateTime.Parse(
+                            strdict["eventenqueuedutctime"],
                             CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.ExternalTemperature = number;
-                    }
+                            DateTimeStyles.AllowWhiteSpaces);
 
-                    if (strdict.TryGetValue("Humidity", out str) &&
-                        double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.Humidity = number;
-                    }
+                        IEnumerable<DeviceTelemetryFieldModel> fields;
 
-                    if (strdict.TryGetValue("Temperature", out str) &&
-                        double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.Temperature = number;
-                    }
+                        if (telemetryFields != null && telemetryFields.Count > 0)
+                        {
+                            fields = telemetryFields;
+                        }
+                        else
+                        {
+                            List<string> reservedColumns = new List<string>
+                        {
+                            "DeviceId",
+                            "EventEnqueuedUtcTime",
+                            "EventProcessedUtcTime",
+                            "IoTHub",
+                            "PartitionId"
+                        };
 
-                    DateTime date;
-                    if (strdict.TryGetValue("EventEnqueuedUtcTime", out str) &&
-                        DateTime.TryParse(
-                            str, 
-                            CultureInfo.InvariantCulture,
-                            DateTimeStyles.AllowWhiteSpaces,
-                            out date))
-                    {
-                        model.Timestamp = date;
-                    }
+                            fields = strdict.Keys
+                                .Where((key) => !reservedColumns.Contains(key))
+                                .Select((name) => new DeviceTelemetryFieldModel
+                                {
+                                    Name = name,
+                                    Type = "double"
+                                });
+                        }
 
-                    models.Add(model);
+                        foreach (var field in fields)
+                        {
+                            if (strdict.TryGetValue(field.Name, out str))
+                            {
+                                switch (field.Type.ToUpperInvariant())
+                                {
+                                    case "INT":
+                                    case "INT16":
+                                    case "INT32":
+                                    case "INT64":
+                                    case "SBYTE":
+                                    case "BYTE":
+                                        int intValue;
+                                        if (
+                                            int.TryParse(
+                                                str,
+                                                NumberStyles.Integer,
+                                                CultureInfo.InvariantCulture,
+                                                out intValue) &&
+                                            !model.Values.ContainsKey(field.Name))
+                                        {
+                                            model.Values.Add(field.Name, intValue);
+                                        }
+                                        break;
+
+                                    case "DOUBLE":
+                                    case "DECIMAL":
+                                    case "SINGLE":
+                                        double dblValue;
+                                        if (
+                                            double.TryParse(
+                                                str,
+                                                NumberStyles.Float,
+                                                CultureInfo.InvariantCulture,
+                                                out dblValue) &&
+                                            !model.Values.ContainsKey(field.Name))
+                                        {
+                                            model.Values.Add(field.Name, dblValue);
+                                        }
+                                        break;
+                                }
+                            }
+                        }
+
+                        models.Add(model);
+                    }
                 }
             }
             finally
             {
-                IDisposable disp;
-
-                if ((disp = stream) != null)
-                {
-                    disp.Dispose();
-                }
-
-                if ((disp = reader) != null)
-                {
-                    disp.Dispose();
-                }
             }
 
             return models;
         }
 
-        private async static Task<List<DeviceTelemetrySummaryModel>> LoadBlobTelemetrySummaryModelsAsync(
-            CloudBlockBlob blob)
+        private static List<DeviceTelemetrySummaryModel> LoadBlobTelemetrySummaryModels(Stream stream, DateTime? lastModifiedTime)
         {
-            Debug.Assert(blob != null, "blob is a null reference.");
+            Debug.Assert(stream != null, "stream is a null reference.");
 
             var models = new List<DeviceTelemetrySummaryModel>();
 
-            TextReader reader = null;
-            MemoryStream stream = null;
             try
             {
-                stream = new MemoryStream();
-                await blob.DownloadToStreamAsync(stream);
                 stream.Position = 0;
-                reader = new StreamReader(stream);
-
-                IEnumerable<StrDict> strdicts = ParsingHelper.ParseCsv(reader).ToDictionaries();
-                DeviceTelemetrySummaryModel model;
-                double number;
-                string str;
-                foreach (StrDict strdict in strdicts)
+                using (var reader = new StreamReader(stream))
                 {
-                    model = new DeviceTelemetrySummaryModel();
-
-                    if (strdict.TryGetValue("deviceid", out str))
+                    IEnumerable<StrDict> strdicts = ParsingHelper.ParseCsv(reader).ToDictionaries();
+                    DeviceTelemetrySummaryModel model;
+                    double number;
+                    string str;
+                    foreach (StrDict strdict in strdicts)
                     {
-                        model.DeviceId = str;
-                    }
+                        model = new DeviceTelemetrySummaryModel();
 
-                    if (strdict.TryGetValue("averagehumidity", out str) &&
-                       double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.AverageHumidity = number;
-                    }
+                        if (strdict.TryGetValue("deviceid", out str))
+                        {
+                            model.DeviceId = str;
+                        }
 
-                    if (strdict.TryGetValue("maxhumidity", out str) &&
-                       double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.MaximumHumidity = number;
-                    }
+                        if (strdict.TryGetValue("averagehumidity", out str) &&
+                           double.TryParse(
+                                str,
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out number))
+                        {
+                            model.AverageHumidity = number;
+                        }
 
-                    if (strdict.TryGetValue("minimumhumidity", out str) &&
-                       double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.MinimumHumidity = number;
-                    }
+                        if (strdict.TryGetValue("maxhumidity", out str) &&
+                           double.TryParse(
+                                str,
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out number))
+                        {
+                            model.MaximumHumidity = number;
+                        }
 
-                    if (strdict.TryGetValue("timeframeminutes", out str) &&
-                       double.TryParse(
-                            str,
-                            NumberStyles.Float,
-                            CultureInfo.InvariantCulture,
-                            out number))
-                    {
-                        model.TimeFrameMinutes = number;
-                    }
+                        if (strdict.TryGetValue("minimumhumidity", out str) &&
+                           double.TryParse(
+                                str,
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out number))
+                        {
+                            model.MinimumHumidity = number;
+                        }
 
-                    // Translate LastModified to local time zone.  DateTimeOffsets 
-                    // don't do this automatically.  This is for equivalent behavior 
-                    // with parsed DateTimes.
-                    if ((blob.Properties != null) &&
-                        blob.Properties.LastModified.HasValue)
-                    {
-                        model.Timestamp = blob.Properties.LastModified.Value.LocalDateTime;
-                    }
+                        if (strdict.TryGetValue("timeframeminutes", out str) &&
+                           double.TryParse(
+                                str,
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out number))
+                        {
+                            model.TimeFrameMinutes = number;
+                        }
 
-                    models.Add(model);
+                        model.Timestamp = lastModifiedTime;
+
+                        models.Add(model);
+                    }
                 }
             }
             finally
             {
-                IDisposable disp;
-                if ((disp = stream) != null)
-                {
-                    disp.Dispose();
-                }
-
-                if ((disp = reader) != null)
-                {
-                    disp.Dispose();
-                }
             }
 
             return models;

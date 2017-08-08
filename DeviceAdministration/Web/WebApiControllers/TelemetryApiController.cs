@@ -4,17 +4,20 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web.Http;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.DeviceSchema;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Exceptions;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.BusinessLogic;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Models;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Models;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Security;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
+using GlobalResources;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Mapper;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Models;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Helpers;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.WebApiControllers
 {
-    using StringPair = KeyValuePair<string, string>;
 
     /// <summary>
     /// A WebApiControllerBase-derived class for telemetry-related end points.
@@ -94,27 +97,41 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
             Func<Task<DashboardDevicePaneDataModel>> getTelemetry =
                 async () =>
                 {
+                    DeviceModel device = await _deviceLogic.GetDeviceAsync(deviceId);
+
+                    IList<DeviceTelemetryFieldModel> telemetryFields = null;
+
+                    try
+                    {
+                        telemetryFields = _deviceLogic.ExtractTelemetry(device);
+                        result.DeviceTelemetryFields = telemetryFields != null ?
+                        telemetryFields.ToArray() : null;
+                    }
+                    catch
+                    {
+                        HttpResponseMessage message = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                        message.Content = new StringContent(
+                        string.Format(Strings.InvalidDeviceTelemetryFormat, deviceId));
+                        throw new HttpResponseException(message);
+                    }
+
+                    // Get Telemetry Summary
                     DeviceTelemetrySummaryModel summaryModel;
 
                     result.DeviceTelemetrySummaryModel = summaryModel =
                         await _deviceTelemetryLogic.LoadLatestDeviceTelemetrySummaryAsync(
                             deviceId, DateTime.Now.AddMinutes(-MAX_DEVICE_SUMMARY_AGE_MINUTES));
 
-                    IEnumerable<DeviceTelemetryModel> telemetryModels;
-                    if ((summaryModel != null) && summaryModel.Timestamp.HasValue && summaryModel.TimeFrameMinutes.HasValue)
+                    if (summaryModel == null)
                     {
-                        DateTime minTime = summaryModel.Timestamp.Value.AddMinutes(-summaryModel.TimeFrameMinutes.Value);
-
-                        telemetryModels = await _deviceTelemetryLogic.LoadLatestDeviceTelemetryAsync(deviceId, minTime);
-
-                    }
-                    else
-                    {
-                        telemetryModels = null;
-
                         result.DeviceTelemetrySummaryModel =
                             new DeviceTelemetrySummaryModel();
                     }
+
+                    // Get Telemetry History
+                    IEnumerable<DeviceTelemetryModel> telemetryModels;
+                    DateTime minTime = DateTime.Now.AddMinutes(-MAX_DEVICE_SUMMARY_AGE_MINUTES);
+                    telemetryModels = await _deviceTelemetryLogic.LoadLatestDeviceTelemetryAsync(deviceId, telemetryFields, minTime);
 
                     if (telemetryModels == null)
                     {
@@ -146,9 +163,26 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
             Func<Task<DeviceTelemetryModel[]>> getTelemetry =
                 async () =>
                 {
+                    DeviceModel device = await _deviceLogic.GetDeviceAsync(deviceId);
+
+                    IList<DeviceTelemetryFieldModel> telemetryFields = null;
+
+                    try
+                    {
+                        telemetryFields = _deviceLogic.ExtractTelemetry(device);
+                    }
+                    catch
+                    {
+                        HttpResponseMessage message = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                        message.Content = new StringContent(
+                            string.Format(Strings.InvalidDeviceTelemetryFormat, deviceId));
+                        throw new HttpResponseException(message);
+                    }
+
                     IEnumerable<DeviceTelemetryModel> telemetryModels =
                         await _deviceTelemetryLogic.LoadLatestDeviceTelemetryAsync(
-                            deviceId, 
+                            deviceId,
+                            telemetryFields, 
                             minTime);
 
                     if (telemetryModels == null)
@@ -210,9 +244,9 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
                     if (data != null)
                     {
                         historyItems.AddRange(data);
-
-                        List<dynamic> devices = await LoadAllDevicesAsync();
-
+                        //get alert history
+                        List<DeviceModel> devices = await this.LoadAllDevicesAsync();
+   
                         if (devices != null)
                         {
                             DeviceListLocationsModel locationsModel = _deviceLogic.ExtractLocationsData(devices);
@@ -275,31 +309,35 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
             return await GetServiceResponseAsync<AlertHistoryResultsModel>(loadHistoryItems, false);
         }
 
-        private async Task<List<dynamic>> LoadAllDevicesAsync()
+        
+
+        private async Task<List<DeviceModel>> LoadAllDevicesAsync()
         {
-            var query = new DeviceListQuery()
-                    {
+            var filter = new DeviceListFilter()
+            {
                 Skip = 0,
                 Take = MAX_DEVICES_TO_DISPLAY_ON_DASHBOARD,
-                SortColumn = "DeviceID"
-                    };
+                SortColumn = "twin.deviceId"
+            };
 
             string deviceId;
-            var devices = new List<dynamic>();
-            DeviceListQueryResult queryResult = await _deviceLogic.GetDevices(query);
-            if ((queryResult != null) &&  (queryResult.Results != null))
+            var devices = new List<DeviceModel>();
+            DeviceListFilterResult filterResult = await  _deviceLogic.GetDevices(filter);
+
+
+            if ((filterResult != null) && (filterResult.Results != null))
             {
-                string enabledState = "";
-                dynamic props = null;
-                foreach (dynamic devInfo in queryResult.Results)
+                bool? enabledState;
+                DeviceProperties props;
+                foreach (var devInfo in filterResult.Results)
                 {
                     try
                     {
-                        deviceId = DeviceSchemaHelper.GetDeviceID(devInfo);
-                        props = DeviceSchemaHelper.GetDeviceProperties(devInfo);
+                        deviceId = devInfo.DeviceProperties.DeviceID;
+                        props = devInfo.DeviceProperties;
                         enabledState = props.HubEnabledState;
                     }
-                    catch (DeviceRequiredPropertyNotFoundException)
+                    catch (NullReferenceException)
                     {
                         continue;
                     }
@@ -321,15 +359,15 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
         {
             return await GetServiceResponseAsync<DeviceListLocationsModel>(async () =>
             {
-                var query = new DeviceListQuery()
+                var filter = new DeviceListFilter()
                 {
                     Skip = 0,
                     Take = MAX_DEVICES_TO_DISPLAY_ON_DASHBOARD,
-                    SortColumn = "DeviceID"
+                    SortColumn = "twin.deviceId"
                 };
 
-                DeviceListQueryResult queryResult = await _deviceLogic.GetDevices(query);
-                DeviceListLocationsModel dataModel = _deviceLogic.ExtractLocationsData(queryResult.Results);
+                DeviceListFilterResult filterResult = await _deviceLogic.GetDevices(filter);
+                DeviceListLocationsModel dataModel = _deviceLogic.ExtractLocationsData(filterResult.Results);
  
                 return dataModel;
             }, false);
@@ -344,7 +382,9 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.
             {
                 String keySetting = await Task.Run(() =>
                 {
-                    return _configProvider.GetConfigurationSettingValue("MapApiQueryKey");
+                    // Set key to empty if passed value 0 from arm template
+                    string key = _configProvider.GetConfigurationSettingValue("MapApiQueryKey");
+                    return key.Equals("0") ? string.Empty : key;
                 });
                 return keySetting;
             }, false);

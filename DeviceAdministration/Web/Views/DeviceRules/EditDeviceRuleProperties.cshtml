@@ -1,5 +1,6 @@
 ﻿@using System.Web.Mvc.Html
 @using GlobalResources
+@using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Helpers
 @model Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Models.EditDeviceRuleModel
 
 @{
@@ -60,10 +61,10 @@
 
         <label class="edit_form__label">@Strings.RuleOutputHeader</label>
         @{
-            object htmlAttributes = new { @class = "edit_form__select" };
+            object htmlAttributes = new { @class = "edit_form__select edit_form_control_last" };
             if (Model.AvailableRuleOutputs.Count < 2)
             {
-                htmlAttributes = new { @disabled = "disabled", @class = "edit_form__select" };
+                htmlAttributes = new { @disabled = "disabled", @class = "edit_form__select edit_form_control_last" };
                 @Html.HiddenFor(m => m.RuleOutput);
             }
         }
@@ -84,10 +85,10 @@
 
     var resources = {
         redirectUrl: '@Url.Action("Index", "DeviceRules")',
-        ruleUpdateError: '@Strings.RuleUpdateError',
-        enabledString: '@Strings.Enabled',
-        disabledString: '@Strings.Disabled'
+        ruleUpdateError: '@Html.JavaScriptString(Strings.RuleUpdateError)',
+        enabledString: '@Html.JavaScriptString(Strings.Enabled)',
+        disabledString: '@Html.JavaScriptString(Strings.Disabled)'
     }
 </script>
 
-<script type="text/javascript" src="~/Scripts/Views/DeviceRules/EditDeviceRuleProperties.js"></script>
+<script type="text/javascript" src="~/Scripts/Views/DeviceRules/EditDeviceRuleProperties.js?ver=@Constants.JSVersion"></script>

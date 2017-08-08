@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Azure.Devices.Client;
+using Microsoft.Azure.Devices.Shared;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Transport
 {
@@ -9,7 +11,8 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
     /// </summary>
     public interface ITransport
     {
-        void Open();
+        Task OpenAsync();
+
         Task CloseAsync();
 
         Task SendEventAsync(dynamic eventData);
@@ -25,5 +28,13 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         Task SignalCompletedCommand(DeserializableCommand command);
 
         Task SignalRejectedCommand(DeserializableCommand command);
+
+        Task UpdateReportedPropertiesAsync(TwinCollection reportedProperties);
+
+        Task<Twin> GetTwinAsync();
+
+        Task SetMethodHandlerAsync(string methodName, MethodCallback callback);
+
+        void SetDesiredPropertyUpdateCallback(DesiredPropertyUpdateCallback callback);
     }
 }

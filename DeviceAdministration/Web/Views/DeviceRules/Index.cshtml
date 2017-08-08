@@ -1,4 +1,5 @@
 ﻿@using GlobalResources
+@using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Helpers
 @model Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Models.EditDeviceRuleModel
 
 @{
@@ -56,7 +57,7 @@
             </div>
 
             <div id="loadingElement" class="loader_container loader_container_details">
-                <div class="loader_container__loader loader_container__loader--large_top_margin"></div>
+                <div class="loader_container__loader"></div>
             </div>
 
         </div>
@@ -70,20 +71,20 @@
     "use strict";
 
     var resources = {
-        retry: '@Strings.Retry',
-        serviceUnavailable: '@Strings.ServiceUnavailable',
-        unableToRetrieveRuleFromService: '@Strings.UnableToRetrieveRuleFromService',
-        disabled: '@Strings.Disabled',
-        enabled: '@Strings.Enabled',
-        failedToRetrieveRules: '@Strings.FailedToRetrieveRules',
-        noRuleSelected: '@Strings.NoRuleSelectedLabel',
-        ruleUpdateError: '@Strings.RuleUpdateError',
-        rulesList: '@Strings.Rules',
-        nextPage: '@Strings.Next',
-        previousPage: '@Strings.Previous'
+        retry: '@Html.JavaScriptString(Strings.Retry)',
+        serviceUnavailable: '@Html.JavaScriptString(Strings.ServiceUnavailable)',
+        unableToRetrieveRuleFromService: '@Html.JavaScriptString(Strings.UnableToRetrieveRuleFromService)',
+        disabled: '@Html.JavaScriptString(Strings.Disabled)',
+        enabled: '@Html.JavaScriptString(Strings.Enabled)',
+        failedToRetrieveRules: '@Html.JavaScriptString(Strings.FailedToRetrieveRules)',
+        noRuleSelected: '@Html.JavaScriptString(Strings.NoRuleSelectedLabel)',
+        ruleUpdateError: '@Html.JavaScriptString(Strings.RuleUpdateError)',
+        rulesList: '@Html.JavaScriptString(Strings.Rules)',
+        nextPage: '@Html.JavaScriptString(Strings.Next)',
+        previousPage: '@Html.JavaScriptString(Strings.Previous)'
     };
 </script>
 
 <script src="~/Scripts/jquery-datatables-api-extensions.js"></script>
-<script src="~/Scripts/Views/DeviceRules/DeviceRulesIndex.js"></script>
-<script src="~/Scripts/Views/DeviceRules/DeviceRuleProperties.js"></script>
+<script src="~/Scripts/Views/DeviceRules/DeviceRulesIndex.js?ver=@Constants.JSVersion"></script>
+<script src="~/Scripts/Views/DeviceRules/DeviceRuleProperties.js?ver=@Constants.JSVersion"></script>

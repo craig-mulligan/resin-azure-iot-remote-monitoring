@@ -1,10 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.DeviceSchema;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Extensions;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Factory;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Models;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Models.Commands;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.CommandProcessors;
@@ -13,7 +16,9 @@ using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.Sim
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Telemetry.Factory;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Transport;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Transport.Factory;
+using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices.Common.Exceptions;
+using Microsoft.Azure.Devices.Shared;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Devices
 {
@@ -22,6 +27,16 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
     /// </summary>
     public class DeviceBase : IDevice
     {
+        public const string DeviceStatePropertyName = "Device.DeviceState";
+        public const string StartupTimePropertyName = "Device.StartupTime";
+        public const string FirmwareVersionPropertyName = "System.FirmwareVersion";
+        public const string ConfigurationVersionPropertyName = "System.ConfigurationVersion";
+        public const string TemperatureMeanValuePropertyName = "Config.TemperatureMeanValue";
+        public const string TelemetryIntervalPropertyName = "Config.TelemetryInterval";
+        public const string LastDesiredPropertyChangePropertyName = "Device.LastDesiredPropertyChange";
+        public const string LastFactoryResetTimePropertyName = "Device.LastFactoryResetTime";
+        public const string LastRebootTimePropertyName = "Device.LastRebootTime";
+
         // pointer to the currently executing event group
         private int _currentEventGroup = 0;
 
@@ -41,19 +56,44 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         public string HostName { get; set; }
         public string PrimaryAuthKey { get; set; }
 
-        private dynamic _deviceProperties;
-        public dynamic DeviceProperties
+        private DeviceProperties _deviceProperties;
+        public DeviceProperties DeviceProperties
         {
-            get {  return _deviceProperties; }
+            get { return _deviceProperties; }
             set { _deviceProperties = value; }
         }
 
-        public dynamic Commands { get; set; }
+        public List<Command> Commands { get; set; }
+
+        public List<Common.Models.Telemetry> Telemetry { get; set; }
 
         public List<ITelemetry> TelemetryEvents { get; private set; }
         public bool RepeatEventListForever { get; set; }
 
         protected object _telemetryController;
+
+        private Dictionary<string, string> _propertyMapping = new Dictionary<string, string>
+        {
+            { "CreatedTime", "Device.CreatedTime" },
+            { "UpdatedTime", "Device.UpdatedTime" },
+            { "DeviceState", DeviceStatePropertyName },
+            { "Manufacturer", "System.Manufacturer" },
+            { "ModelNumber", "System.ModelNumber" },
+            { "SerialNumber", "System.SerialNumber" },
+            { "FirmwareVersion", FirmwareVersionPropertyName },
+            { "AvailablePowerSources", "System.AvailablePowerSources" },
+            { "PowerSourceVoltage", "System.PowerSourceVoltage" },
+            { "BatteryLevel", "System.BatteryLevel" },
+            { "MemoryFree", "System.MemoryFree" },
+            { "HostName", "System.HostName" },
+            { "Platform", "System.Platform" },
+            { "Processor", "System.Processor" },
+            { "InstalledRAM", "System.InstalledRAM" },
+            { "Latitude", "Device.Location.Latitude" },
+            { "Longitude", "Device.Location.Longitude" }
+        };
+
+        protected Dictionary<string, Func<object, Task>> _desiredPropertyUpdateHandlers = new Dictionary<string, Func<object, Task>>();
 
         /// <summary>
         /// 
@@ -82,9 +122,10 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
 
         protected virtual void InitDeviceInfo(InitialDeviceConfig config)
         {
-            dynamic initialDevice = SampleDeviceFactory.GetSampleSimulatedDevice(config.DeviceId, config.Key);
-            DeviceProperties = DeviceSchemaHelper.GetDeviceProperties(initialDevice);
-            Commands = CommandSchemaHelper.GetSupportedCommands(initialDevice);
+            DeviceModel initialDevice = SampleDeviceFactory.GetSampleSimulatedDevice(config.DeviceId, config.Key);
+            DeviceProperties = initialDevice.DeviceProperties;
+            Commands = initialDevice.Commands ?? new List<Command>();
+            Telemetry = initialDevice.Telemetry ?? new List<Common.Models.Telemetry>();
             HostName = config.HostName;
             PrimaryAuthKey = config.Key;
         }
@@ -109,16 +150,17 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         /// Generates a DeviceInfo packet for a simulated device to send over the wire
         /// </summary>
         /// <returns></returns>
-        public virtual dynamic GetDeviceInfo()
+        public virtual DeviceModel GetDeviceInfo()
         {
-            dynamic device = DeviceSchemaHelper.BuildDeviceStructure(DeviceID, true, null);
-            device.DeviceProperties = DeviceSchemaHelper.GetDeviceProperties(this);
-            device.Commands = CommandSchemaHelper.GetSupportedCommands(this);
+            DeviceModel device = DeviceCreatorHelper.BuildDeviceStructure(DeviceID, true, null);
+            device.DeviceProperties = this.DeviceProperties;
+            device.Commands = this.Commands?.Where(c => c.DeliveryType == DeliveryType.Message).ToList() ?? new List<Command>();
+            device.Telemetry = this.Telemetry ?? new List<Common.Models.Telemetry>();
             device.Version = SampleDeviceFactory.VERSION_1_0;
             device.ObjectType = SampleDeviceFactory.OBJECT_TYPE_DEVICE_INFO;
 
             // Remove the system properties from a device, to better emulate the behavior of real devices when sending device info messages.
-            DeviceSchemaHelper.RemoveSystemPropertiesForSimulatedDeviceInfo(device);
+            device.SystemProperties = null;
 
             return device;
         }
@@ -133,24 +175,36 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         {
             try
             {
-                Transport.Open();
+                await InitializeAsync();
 
                 var loopTasks = new List<Task>
-            {
-                StartReceiveLoopAsync(token), 
-                StartSendLoopAsync(token)
-            };
+                {
+                    StartReceiveLoopAsync(token),
+                    StartSendLoopAsync(token)
+                };
 
                 // Wait both the send and receive loops
                 await Task.WhenAll(loopTasks.ToArray());
-
-                // once the code makes it here the token has been canceled
-                await Transport.CloseAsync();
             }
             catch (Exception ex)
             {
-                Logger.LogError("Unexpected Exception starting device: {0}", ex.ToString());
+                Logger.LogError($"Exception raise while starting device {DeviceID}: {ex}");
             }
+            finally
+            {
+                // once the code makes it here the token has been canceled
+                await Transport.CloseAsync();
+            }
+        }
+
+        private async Task InitializeAsync()
+        {
+            await Transport.OpenAsync();
+            await SetupCallbacksAsync();
+
+            var twin = await Transport.GetTwinAsync();
+            await UpdateReportedPropertiesAsync(twin.Properties.Reported);
+            await OnDesiredPropertyUpdate(twin.Properties.Desired, null);
         }
 
         /// <summary>
@@ -165,6 +219,9 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
             try
             {
                 Logger.LogInfo("Booting device {0}...", DeviceID);
+
+                var authMethod = new Client.DeviceAuthenticationWithRegistrySymmetricKey(DeviceID, PrimaryAuthKey);
+                var deviceConnectionString = Client.IotHubConnectionStringBuilder.Create(HostName, authMethod).ToString();
 
                 do
                 {
@@ -193,18 +250,18 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                 Logger.LogWarning("Device {0} sent all events and is shutting down send loop. (Set RepeatEventListForever = true on the device to loop forever.)", DeviceID);
 
             }
-            catch (TaskCanceledException) 
+            catch (TaskCanceledException)
             {
                 //do nothing if the task was cancelled
             }
             catch (Exception ex)
             {
-                Logger.LogError("Unexpected Exception starting device send loop: {0}", ex.ToString());
+                Logger.LogError($"Exception raised while starting device send loop {DeviceID}: {ex.Message}");
             }
 
             if (token.IsCancellationRequested)
             {
-                Logger.LogInfo("********** Processing Device {0} has been cancelled - StartSendLoopAsync Ending. **********", DeviceID);   
+                Logger.LogInfo("********** Processing Device {0} has been cancelled - StartSendLoopAsync Ending. **********", DeviceID);
             }
         }
 
@@ -239,8 +296,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                             continue;
                         }
 
-                        processingResult = 
-                        await RootCommandProcessor.HandleCommandAsync(command);
+                        processingResult = await RootCommandProcessor.HandleCommandAsync(command);
 
                         switch (processingResult)
                         {
@@ -273,8 +329,8 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                             "Device: {1}{0}Command: {2}{0}Lock token: {3}{0}Error Type: {4}{0}Exception: {5}{0}",
                             Console.Out.NewLine,
                             DeviceID,
-                            command.CommandName,
-                            command.LockToken,
+                            command?.CommandName,
+                            command?.LockToken,
                             ex.IsTransient ? "Transient Error" : "Non-transient Error",
                             ex.ToString());
                     }
@@ -286,13 +342,12 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                             "Device: {1}{0}Command: {2}{0}Lock token: {3}{0}Exception: {4}{0}",
                             Console.Out.NewLine,
                             DeviceID,
-                            command.CommandName,
-                            command.LockToken,
+                            command?.CommandName,
+                            command?.LockToken,
                             ex.ToString());
                     }
 
-                    if ((command != null) &&
-                        (exception != null))
+                    if (command != null && exception != null)
                     {
                         await Transport.SignalAbandonedCommand(command);
                     }
@@ -304,10 +359,149 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
             }
             catch (Exception ex)
             {
-                Logger.LogError("Unexpected Exception starting device receive loop: {0}", ex.ToString());
+                Logger.LogError($"Exception raised while starting device receive loop {DeviceID}: {ex}");
             }
 
             Logger.LogInfo("********** Processing Device {0} has been cancelled - StartReceiveLoopAsync Ending. **********", DeviceID);
+        }
+
+        protected async Task UpdateReportedPropertiesAsync(TwinCollection reported, bool regenerate = false)
+        {
+            var patch = new TwinCollection();
+            CrossSyncProperties(patch, reported, regenerate);
+            SupportedMethodsHelper.CreateSupportedMethodReport(patch, Commands, reported);
+            AddConfigs(patch);
+
+            // Update ReportedProperties to IoT Hub
+            await Transport.UpdateReportedPropertiesAsync(patch);
+        }
+
+        /// <summary>
+        /// Cross synchonize DeviceProperties and ReportedProperties
+        /// </summary>
+        /// <returns></returns>
+        protected void CrossSyncProperties(TwinCollection patch, TwinCollection reported, bool regenerate)
+        {
+            var devicePropertiesType = DeviceProperties.GetType();
+            var reportedPairs = reported.AsEnumerableFlatten().ToDictionary(pair => pair.Key, pair => pair.Value);
+
+            if (!regenerate)
+            {
+                // Overwrite regenerated DeviceProperties by current ReportedProperties
+                foreach (var pair in reportedPairs)
+                {
+                    string devicePropertyName = _propertyMapping.SingleOrDefault(p => p.Value == pair.Key).Key;
+                    if (string.IsNullOrWhiteSpace(devicePropertyName))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        DeviceProperties.SetProperty(devicePropertyName, pair.Value.Value);
+                    }
+                    catch
+                    {
+                        // Ignore any failure while overwriting the DeviceProperties
+                    }
+                }
+            }
+
+            // Add missing DeviceProperties to ReportedProperties
+            foreach (var property in devicePropertiesType.GetProperties())
+            {
+                string reportedName;
+                if (!_propertyMapping.TryGetValue(property.Name, out reportedName))
+                {
+                    continue;
+                }
+
+                var value = property.GetValue(DeviceProperties);
+                if (regenerate || value != null && !reportedPairs.ContainsKey(reportedName))
+                {
+                    patch.Set(reportedName, value);
+                }
+            }
+        }
+
+        protected void AddConfigs(TwinCollection patch)
+        {
+            var telemetryWithInterval = _telemetryController as ITelemetryWithInterval;
+            if (telemetryWithInterval != null)
+            {
+                patch.Set(TelemetryIntervalPropertyName, telemetryWithInterval.TelemetryIntervalInSeconds);
+            }
+
+            var telemetryWithTemperatureMeanValue = _telemetryController as ITelemetryWithTemperatureMeanValue;
+            if (telemetryWithTemperatureMeanValue != null)
+            {
+                patch.Set(TemperatureMeanValuePropertyName, telemetryWithTemperatureMeanValue.TemperatureMeanValue);
+            }
+
+            patch.Set(StartupTimePropertyName, DateTime.UtcNow.ToString(CultureInfo.CurrentCulture));
+        }
+
+        private async Task SetupCallbacksAsync()
+        {
+            foreach (var method in Commands.Where(c => c.DeliveryType == DeliveryType.Method))
+            {
+                try
+                {
+                    var handler = GetType().GetMethod(FormattableString.Invariant($"On{method.Name}")).CreateDelegate(typeof(MethodCallback), this) as MethodCallback;
+
+                    await Transport.SetMethodHandlerAsync(method.Name, handler);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(FormattableString.Invariant($"Exception raised while adding callback for method {method.Name} on device {DeviceID}: {ex.Message}"));
+                }
+            }
+
+            Transport.SetDesiredPropertyUpdateCallback(OnDesiredPropertyUpdate);
+        }
+
+        protected async Task SetReportedPropertyAsync(string name, dynamic value)
+        {
+            var collection = new TwinCollection();
+            TwinCollectionExtension.Set(collection, name, value);
+            await Transport.UpdateReportedPropertiesAsync(collection);
+        }
+
+        protected async Task SetReportedPropertyAsync(Dictionary<string, dynamic> pairs)
+        {
+            var collection = new TwinCollection();
+            foreach (var pair in pairs)
+            {
+                TwinCollectionExtension.Set(collection, pair.Key, pair.Value);
+            }
+            await Transport.UpdateReportedPropertiesAsync(collection);
+        }
+
+        public async Task OnDesiredPropertyUpdate(TwinCollection desiredProperties, object userContext)
+        {
+            await SetReportedPropertyAsync(LastDesiredPropertyChangePropertyName, desiredProperties.ToJson());
+            Logger.LogInfo($"{DeviceID} received desired property update: {desiredProperties.ToJson()}");
+
+            foreach (var pair in desiredProperties.AsEnumerableFlatten())
+            {
+                Func<object, Task> handler;
+                if (_desiredPropertyUpdateHandlers.TryGetValue(pair.Key, out handler))
+                {
+                    try
+                    {
+                        await handler(pair.Value.Value.Value);
+                        Logger.LogInfo($"Successfully called desired property update handler {handler.Method.Name} on {DeviceID}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"Exception raised while processing desired property {pair.Key} change on device {DeviceID}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning($"Cannot find desired property update handler for {pair.Key} on {DeviceID}");
+                }
+            }
         }
     }
 }

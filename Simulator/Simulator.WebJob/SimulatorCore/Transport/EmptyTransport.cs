@@ -2,29 +2,29 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Logging;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Serialization;
+using Microsoft.Azure.Devices.Client;
+using Microsoft.Azure.Devices.Shared;
+using Newtonsoft.Json;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Transport
 {
     public class EmptyTransport : ITransport
     {
         private readonly ILogger _logger;
-        private readonly ISerialize _serializer;
 
-        public EmptyTransport(ILogger logger, ISerialize serializer)
+        public EmptyTransport(ILogger logger)
         {
             _logger = logger;
-            _serializer = serializer;
         }
 
-        public void Open()
+        public async Task OpenAsync()
         {
-            return;
+            await Task.FromResult(0);
         }
 
-        public Task CloseAsync()
+        public async Task CloseAsync()
         {
-            return Task.Run(() => { });
+            await Task.FromResult(0);
         }
 
         public async Task SendEventAsync(dynamic eventData)
@@ -39,20 +39,21 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
             _logger.LogInfo("SendEventAsync: EventId: " + eventId.ToString());
             _logger.LogInfo("SendEventAsync: message: " + eventData.ToString());
 
-            await Task.Run(() => { return; });
+            await Task.FromResult(0);
         }
 
         public async Task SendEventBatchAsync(IEnumerable<Client.Message> messages)
         {
             _logger.LogInfo("SendEventBatchAsync called");
 
-            await Task.Run(() => { return; });
+            await Task.FromResult(0);
         }
 
         public async Task<DeserializableCommand> ReceiveAsync()
         {
             _logger.LogInfo("ReceiveAsync: waiting...");
-            return await Task.Run(() => new DeserializableCommand(new Client.Message(), _serializer));
+
+            return await Task.FromResult(new DeserializableCommand(new Client.Message()));
         }
 
         public async Task SignalAbandonedCommand(DeserializableCommand command)
@@ -62,7 +63,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                 throw new ArgumentNullException("command");
             }
 
-            await Task.Run(() => { });
+            await Task.FromResult(0);
         }
 
         public async Task SignalCompletedCommand(DeserializableCommand command)
@@ -72,7 +73,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                 throw new ArgumentNullException("command");
             }
 
-            await Task.Run(() => { });
+            await Task.FromResult(0);
         }
 
         public async Task SignalRejectedCommand(DeserializableCommand command)
@@ -82,7 +83,34 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                 throw new ArgumentNullException("command");
             }
 
-            await Task.Run(() => { });
+            await Task.FromResult(0);
+        }
+
+        public async Task UpdateReportedPropertiesAsync(TwinCollection reportedProperties)
+        {
+            _logger.LogInfo("UpdateReportedPropertiesAsync called");
+            _logger.LogInfo($"UpdateReportedPropertiesAsync: reportedProperties: {reportedProperties.ToJson(Formatting.Indented)}");
+
+            await Task.FromResult(0);
+        }
+
+        public async Task<Twin> GetTwinAsync()
+        {
+            _logger.LogInfo("GetTwinAsync called");
+
+            return await Task.FromResult(new Twin());
+        }
+
+        public Task SetMethodHandlerAsync(string methodName, MethodCallback callback)
+        {
+            _logger.LogInfo(FormattableString.Invariant($"SetMethodHandler called: {methodName} -> {callback.Method.Name}"));
+
+            return Task.FromResult(0);
+        }
+
+        public void SetDesiredPropertyUpdateCallback(DesiredPropertyUpdateCallback callback)
+        {
+            _logger.LogInfo(FormattableString.Invariant($"SetDesiredPropertyUpdateCallback called, callback = {callback.Method.Name}"));
         }
     }
 }

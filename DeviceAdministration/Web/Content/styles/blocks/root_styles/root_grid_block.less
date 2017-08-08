@@ -5,9 +5,11 @@
     right: 0;
     width: 368px;
     background-color: @secondary-color;
-    overflow-y: scroll;
 }
-
+#details_grid_container {
+    overflow-y: auto;
+    height:~"calc(100% - 57px)";
+}
 .details_grid__grid_subhead {
     background-image: url("@{base-image-path}/icon_deviceExplorer_details_close.svg");
     background-repeat: no-repeat;
@@ -78,6 +80,31 @@
     font-weight: normal;
 }
 
+.grid_subheadhead {
+  font-size:16pt;
+  color:#4d4d4d;
+  display:inline;
+  font-weight:600;
+  float:none;
+}
+
+.grid_subheadhead_left_space {
+  padding-left:14px;
+}
+
+.header_grid_left_space {
+  padding-left:24px;
+}
+
+.grid_subheadhead_detail_collapsable {
+    float: left;
+    margin: 0;
+    padding: 0 0 0 10px;
+    font-size: @font-size-panel-subsection-header;
+    color: @text-devicedetail-color;
+    font-weight: normal;
+}
+
 .link_grid_subheadhead_detail {
     float: right;
     font-size: @font-size-panel-subsection-header;
@@ -86,7 +113,6 @@
 
 .grid_subhead_detail_label {
     color: @text-devicedetail-color;
-    text-transform: uppercase;
     font-size: @font-size-grid-subhead-detail-label;
     margin: 1.2em 0 3px 0;
     font-weight: normal;
@@ -113,10 +139,41 @@
     padding: 10px 20px;
 }
 
+.grid_detail_lastUpdated {
+    font-size: 0.75em;
+    color: @text-job-lastupdated-color;
+    margin-bottom: 1em;
+}
+
+.grid_detail_jobStatus {
+    font-size: 0.75em;
+    color: @text-color;
+    margin-bottom: 1em;
+    margin-left: 1em;
+}
+
+.grid_detail_label {
+    color: @text-devicedetail-color;
+    font-weight: normal;
+    clear: both;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.grid_container_job {
+    width: 100px;
+}
+
+.link_grid_jobName {
+    font-size: @font-size-panel-subsection-header;
+    display: inline-block;
+    width: ~"calc(100% - 100px)";
+}
+
 .grid_container {
     float: left;
     clear: none;
-    overflow: scroll;
+    overflow: auto;
     font-size: .9em;
     border-left: 1px solid @layout-border-color;
     border-right: 1px solid @layout-border-color;
@@ -140,6 +197,7 @@
     background-size: 7px 11px;
     .transform(rotate(90deg));
     white-space: nowrap;
+    text-transform: uppercase;
     padding: 8px 0 0 40px;
     font-size: 1.1em;
     font-weight: normal;
@@ -150,6 +208,13 @@
     margin: 0 15px 0 0;
 }
 
+.overflow_auto {
+    overflow: auto;
+}
+
+.clear_both {
+    clear: both;
+}
 
 .hidden {
     display: none;

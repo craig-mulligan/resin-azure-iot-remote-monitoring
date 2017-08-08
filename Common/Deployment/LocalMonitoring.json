@@ -2,10 +2,10 @@
     "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json",
     "contentVersion": "1.0.0.0",
     "parameters": {
-        "aadTenant": {
+        "storageEndpointSuffix": {
             "type": "string",
             "metadata": {
-                "description": "The name of the service Tenant"
+                "description": "Suffix added to Azure Storage hostname (examples: core.windows.net, core.cloudapi.de)"
             }
         },
         "suiteName": {
@@ -60,17 +60,17 @@
                 "description": "The Iothub tier"
             }
         },
-        "sbName": {
+        "ehName": {
             "type": "string",
             "metadata": {
-                "description": "The name of the serviceBus"
+                "description": "The name of the eventHub"
             }
         },
-        "sbSku": {
-            "type": "int",
-            "defaultValue": 1,
-            "metadata": { 
-                "description": "The servicebus Sku"
+        "ehSku": {
+            "type": "string",
+            "defaultValue": "Standard",
+            "metadata": {
+                "description": "The eventhub Sku"
             }
         },
         "asaStartBehavior": {
@@ -90,17 +90,17 @@
     },
     "variables": {
         "location": "[resourceGroup().location]",
-        "storageVersion": "2015-05-01-preview",
+        "storageVersion": "2016-01-01",
         "storageId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageName'))]",
-        "sbVersion": "[providers('Microsoft.Eventhub', 'namespaces').apiVersions[0]]",
+        "ehVersion": "[providers('Microsoft.Eventhub', 'namespaces').apiVersions[0]]",
         "ehOutName": "[concat(parameters('suiteName'), '-ehout')]",
         "ehRuleOutName": "[concat(parameters('suiteName'), '-ehruleout')]",
         "sbKeyName": "RootManageSharedAccessKey",
-        "sbResourceId": "[resourceId('Microsoft.Eventhub/namespaces/authorizationRules', parameters('sbName'), variables('sbKeyName'))]",
+        "ehResourceId": "[resourceId('Microsoft.Eventhub/namespaces/authorizationRules', parameters('ehName'), variables('sbKeyName'))]",
         "saVersion": "2015-10-01",
         "docDBVersion": "2015-04-08",
         "docDBResourceId": "[resourceId('Microsoft.DocumentDb/databaseAccounts', parameters('docDBName'))]",
-        "iotHubVersion": "2015-08-15-preview",
+        "iotHubVersion": "2016-02-03",
         "iotHubResourceId": "[resourceId('Microsoft.Devices/Iothubs', parameters('iotHubName'))]",
         "iotHubKeyName": "iothubowner",
         "iotHubKeyResource": "[resourceId('Microsoft.Devices/Iothubs/Iothubkeys', parameters('iotHubName'), variables('iotHubKeyName'))]",
@@ -128,8 +128,12 @@
             "type": "Microsoft.Storage/storageAccounts",
             "name": "[parameters('storageName')]",
             "location": "[variables('location')]",
-            "properties": {
-                "accountType": "[parameters('storageAccountSku')]"
+            "tags": {
+                "IotSuiteType": "[variables('suiteType')]"
+            },
+            "kind": "Storage",
+            "sku": {
+                "name": "[parameters('storageAccountSku')]"
             }
         },
         {
@@ -174,25 +178,27 @@
             ]
         },
         {
-            "apiVersion": "[variables('sbVersion')]",
-            "name": "[parameters('sbName')]",
+            "apiVersion": "[variables('ehVersion')]",
+            "name": "[parameters('ehName')]",
             "type": "Microsoft.Eventhub/namespaces",
             "location": "[variables('location')]",
+            "sku": {
+                "name": "[parameters('ehSku')]"
+            },
             "tags": {
                 "IotSuiteType": "[variables('suiteType')]"
             },
             "properties": {
-                "messagingSku": "[parameters('sbSku')]",
                 "region": "[variables('location')]"
             },
             "resources": [
                 {
-                    "apiVersion": "[variables('sbVersion')]",
+                    "apiVersion": "[variables('ehVersion')]",
                     "name": "[variables('ehOutName')]",
                     "type": "eventHubs",
                     "location": "[variables('location')]",
                     "dependsOn": [
-                        "[concat('Microsoft.Eventhub/namespaces/', parameters('sbName'))]"
+                        "[concat('Microsoft.Eventhub/namespaces/', parameters('ehName'))]"
                     ],
                     "properties": {
                         "path": "[variables('ehOutName')]",
@@ -200,12 +206,12 @@
                     }
                 },
                 {
-                    "apiVersion": "[variables('sbVersion')]",
+                    "apiVersion": "[variables('ehVersion')]",
                     "name": "[variables('ehRuleOutName')]",
                     "type": "eventHubs",
                     "location": "[variables('location')]",
                     "dependsOn": [
-                        "[concat('Microsoft.Eventhub/namespaces/', parameters('sbName'))]"
+                        "[concat('Microsoft.Eventhub/namespaces/', parameters('ehName'))]"
                     ],
                     "properties": {
                         "path": "[variables('ehRuleOutName')]",
@@ -268,7 +274,7 @@
                                     "PathPattern": "devicetelemetry/{date}/{time}",
                                     "StorageAccounts": [
                                         {
-                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).key1]",
+                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).keys[0].value]",
                                             "AccountName": "[parameters('storageName')]"
                                         }
                                     ]
@@ -295,7 +301,7 @@
                                     "PathPattern": "devicetelemetry-summary/{date}/{time}",
                                     "StorageAccounts": [
                                         {
-                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).key1]",
+                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).keys[0].value]",
                                             "AccountName": "[parameters('storageName')]"
                                         }
                                     ]
@@ -315,7 +321,7 @@
                 "Transformation": {
                     "Name": "AllToBlob",
                     "Properties": {
-                        "Query": "WITH \r\n    [StreamData]\r\nAS (\r\n    SELECT\r\n        *\r\n    FROM \r\n      [IoTHubStream] \r\n    WHERE\r\n        [ObjectType] IS NULL -- Filter out device info and command responses\r\n) \r\n\r\nSELECT\r\n    *\r\nINTO\r\n    [Telemetry]\r\nFROM\r\n    [StreamData]\r\n\r\nSELECT\r\n    DeviceId,\r\n    AVG (Humidity) AS [AverageHumidity], \r\n    MIN(Humidity) AS [MinimumHumidity], \r\n    MAX(Humidity) AS [MaxHumidity], \r\n    5.0 AS TimeframeMinutes \r\nINTO\r\n    [TelemetrySummary]\r\nFROM\r\n    [StreamData]\r\nWHERE\r\n    [Humidity] IS NOT NULL\r\nGROUP BY\r\n    DeviceId, \r\n    SlidingWindow (mi, 5)",
+                        "Query": "WITH \r\n    [StreamData]\r\nAS (\r\n    SELECT\r\n        *\r\n    FROM [IoTHubStream]\r\n    WHERE\r\n        [ObjectType] IS NULL -- Filter out device info and command responses\r\n) \r\n\r\nSELECT\r\n    IoTHub.ConnectionDeviceId AS DeviceId,\r\n    Temperature,\r\n    Humidity,\r\n    ExternalTemperature,\r\n    EventProcessedUtcTime,\r\n    PartitionId,\r\n    EventEnqueuedUtcTime,\r\n    * \r\nINTO\r\n    [Telemetry]\r\nFROM\r\n    [StreamData]\r\n\r\nSELECT\r\n    IoTHub.ConnectionDeviceId AS DeviceId,\r\n    AVG (Humidity) AS [AverageHumidity],\r\n    MIN(Humidity) AS [MinimumHumidity],\r\n    MAX(Humidity) AS [MaxHumidity],\r\n    5.0 AS TimeframeMinutes \r\nINTO\r\n    [TelemetrySummary]\r\nFROM [StreamData]\r\nWHERE\r\n    [Humidity] IS NOT NULL\r\nGROUP BY\r\n    IoTHub.ConnectionDeviceId,\r\n    SlidingWindow (mi, 5)",
                         "StreamingUnits": 1
                     }
                 }
@@ -327,7 +333,7 @@
             "name": "[concat(parameters('suiteName'), '-DeviceInfo')]",
             "location": "[variables('location')]",
             "dependsOn": [
-                "[concat('Microsoft.Eventhub/namespaces/', parameters('sbName'))]",
+                "[concat('Microsoft.Eventhub/namespaces/', parameters('ehName'), '/eventHubs/', variables('ehOutName'))]",
                 "[concat('Microsoft.Devices/Iothubs/', parameters('iotHubName'))]"
             ],
             "tags": {
@@ -370,8 +376,8 @@
                             "DataSource": {
                                 "Properties": {
                                     "EventHubName": "[variables('ehOutName')]",
-                                    "ServiceBusNamespace": "[parameters('sbName')]",
-                                    "SharedAccessPolicyKey": "[listkeys(variables('sbResourceId'), variables('sbVersion')).primaryKey]",
+                                    "ServiceBusNamespace": "[parameters('ehName')]",
+                                    "SharedAccessPolicyKey": "[listkeys(variables('ehResourceId'), variables('ehVersion')).primaryKey]",
                                     "SharedAccessPolicyName": "[variables('sbKeyName')]",
                                     "PartitionKey": "PartitionId"
                                 },
@@ -403,7 +409,7 @@
             "location": "[variables('location')]",
             "dependsOn": [
                 "[concat('Microsoft.Storage/storageAccounts/', parameters('storageName'))]",
-                "[concat('Microsoft.Eventhub/namespaces/', parameters('sbName'))]",
+                "[concat('Microsoft.Eventhub/namespaces/', parameters('ehName'), '/eventHubs/', variables('ehRuleOutName'))]",
                 "[concat('Microsoft.Devices/Iothubs/', parameters('iotHubName'))]"
             ],
             "tags": {
@@ -428,7 +434,7 @@
                                     "BlobName": "{date}/{time}/devicerules.json",
                                     "StorageAccounts": [
                                         {
-                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).key1]",
+                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).keys[0].value]",
                                             "AccountName": "[parameters('storageName')]"
                                         }
                                     ],
@@ -474,8 +480,8 @@
                             "DataSource": {
                                 "Properties": {
                                     "EventHubName": "[variables('ehRuleOutName')]",
-                                    "ServiceBusNamespace": "[parameters('sbName')]",
-                                    "SharedAccessPolicyKey": "[listkeys(variables('sbResourceId'), variables('sbVersion')).primaryKey]",
+                                    "ServiceBusNamespace": "[parameters('ehName')]",
+                                    "SharedAccessPolicyKey": "[listkeys(variables('ehResourceId'), variables('ehVersion')).primaryKey]",
                                     "SharedAccessPolicyName": "[variables('sbKeyName')]",
                                     "PartitionKey": "PartitionId"
                                 },
@@ -501,7 +507,7 @@
                                     "PathPattern": "{date}/{time}",
                                     "StorageAccounts": [
                                         {
-                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).key1]",
+                                            "AccountKey": "[listkeys(variables('storageId'), variables('storageVersion')).keys[0].value]",
                                             "AccountName": "[parameters('storageName')]"
                                         }
                                     ]
@@ -521,7 +527,7 @@
                 "Transformation": {
                     "Name": "DeviceRules",
                     "Properties": {
-                        "Query": "WITH AlarmsData AS \r\n(\r\nSELECT\r\n     Stream.DeviceID,\r\n     'Temperature' as ReadingType,\r\n     Stream.Temperature as Reading,\r\n     Ref.Temperature as Threshold,\r\n     Ref.TemperatureRuleOutput as RuleOutput,\r\n     Stream.EventEnqueuedUtcTime AS [Time]\r\nFROM IoTTelemetryStream Stream\r\nJOIN DeviceRulesBlob Ref ON Stream.DeviceID = Ref.DeviceID\r\nWHERE\r\n     Ref.Temperature IS NOT null AND Stream.Temperature > Ref.Temperature\r\n\r\nUNION ALL\r\n\r\nSELECT\r\n     Stream.DeviceID,\r\n     'Humidity' as ReadingType,\r\n     Stream.Humidity as Reading,\r\n     Ref.Humidity as Threshold,\r\n     Ref.HumidityRuleOutput as RuleOutput,\r\n     Stream.EventEnqueuedUtcTime AS [Time]\r\nFROM IoTTelemetryStream Stream\r\nJOIN DeviceRulesBlob Ref ON Stream.DeviceID = Ref.DeviceID\r\nWHERE\r\n     Ref.Humidity IS NOT null AND Stream.Humidity > Ref.Humidity\r\n)\r\n\r\nSELECT *\r\nINTO DeviceRulesMonitoring\r\nFROM AlarmsData\r\n\r\nSELECT *\r\nINTO DeviceRulesHub\r\nFROM AlarmsData",
+                        "Query": "WITH AlarmsData AS \r\n(\r\nSELECT\r\n     Stream.IoTHub.ConnectionDeviceId AS DeviceId,\r\n     'Temperature' as ReadingType,\r\n     Stream.Temperature as Reading,\r\n     Ref.Temperature as Threshold,\r\n     Ref.TemperatureRuleOutput as RuleOutput,\r\n     Stream.EventEnqueuedUtcTime AS [Time]\r\nFROM IoTTelemetryStream Stream\r\nJOIN DeviceRulesBlob Ref ON Stream.IoTHub.ConnectionDeviceId = Ref.DeviceID\r\nWHERE\r\n     Ref.Temperature IS NOT null AND Stream.Temperature > Ref.Temperature\r\n\r\nUNION ALL\r\n\r\nSELECT\r\n     Stream.IoTHub.ConnectionDeviceId AS DeviceId,\r\n     'Humidity' as ReadingType,\r\n     Stream.Humidity as Reading,\r\n     Ref.Humidity as Threshold,\r\n     Ref.HumidityRuleOutput as RuleOutput,\r\n     Stream.EventEnqueuedUtcTime AS [Time]\r\nFROM IoTTelemetryStream Stream\r\nJOIN DeviceRulesBlob Ref ON Stream.IoTHub.ConnectionDeviceId = Ref.DeviceID\r\nWHERE\r\n     Ref.Humidity IS NOT null AND Stream.Humidity > Ref.Humidity\r\n)\r\n\r\nSELECT *\r\nINTO DeviceRulesMonitoring\r\nFROM AlarmsData\r\n\r\nSELECT *\r\nINTO DeviceRulesHub\r\nFROM AlarmsData",
                         "StreamingUnits": 1
                     }
                 }
@@ -551,7 +557,7 @@
         },
         "storageConnectionString": {
             "type": "string",
-            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', parameters('storageName'), ';AccountKey=', listkeys(variables('storageId'), variables('storageVersion')).key1)]"
+            "value": "[concat('DefaultEndpointsProtocol=https;EndpointSuffix=', parameters('storageEndpointSuffix'), ';AccountName=', parameters('storageName'), ';AccountKey=', listkeys(variables('storageId'), variables('storageVersion')).keys[0].value)]"
         },
         "ehOutName": {
             "type": "string",
@@ -563,7 +569,7 @@
         },
         "ehConnectionString": {
             "type": "string",
-            "value": "[listkeys(variables('sbResourceId'), variables('sbVersion')).primaryConnectionString]"
+            "value": "[listkeys(variables('ehResourceId'), variables('ehVersion')).primaryConnectionString]"
         }
     }
 }

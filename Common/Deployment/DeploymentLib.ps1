@@ -1,4 +1,5 @@
-﻿function ImportLibraries(){
+﻿function ImportLibraries()
+{
     $success = $true
     $mydocuments = [environment]::getfolderpath("mydocuments")
     $nugetPath = "{0}\Nugets" -f $mydocuments
@@ -12,9 +13,6 @@
 
     # ActiveDirectory library
     $success = $success -and (LoadLibrary "Microsoft.IdentityModel.Clients.ActiveDirectory" $nugetPath)
-
-    # Servicebus library
-    $success = $success -and (LoadLibrary "WindowsAzure.ServiceBus" $nugetPath "Microsoft.ServiceBus")
 
     # Storage Library
     $success = $success -and (LoadLibrary "WindowsAzure.Storage" $nugetPath "Microsoft.WindowsAzure.Storage")
@@ -110,7 +108,7 @@ function GetSuiteLocation()
     Write-Host "Available locations:";
     $regions = @();
     $index = 1
-    foreach ($loc in $locations)
+    foreach ($loc in $global:locations)
     {
         $region = New-Object System.Object
         $region | Add-Member -MemberType NoteProperty -Name "Option" -Value $index
@@ -118,28 +116,28 @@ function GetSuiteLocation()
         $regions += $region
         $index += 1
     }
-    
+
     Write-Host ($regions | Out-String)
-    
+
     $region = "notset"
     while ($region -eq "notset" -or !(ValidateLocation $region))
     {
-        try 
+        try
         {
             [int]$selectedIndex = Read-Host 'Select an option from the above list'
         }
-        catch 
+        catch
         {
             Write-Host "Must be a number"
             continue
         }
-        
+
         if ($selectedIndex -lt 1 -or $selectedIndex -ge $index)
         {
             continue
         }
-        
-        $region = $locations[$selectedIndex - 1]
+
+        $region = $global:locations[$selectedIndex - 1]
     }
     return $region
 }
@@ -147,7 +145,7 @@ function GetSuiteLocation()
 function ValidateLocation()
 {
     param ([Parameter(Mandatory=$true)][string]$location)
-        
+
     foreach ($loc in $global:locations)
     {
         if ($loc.Replace(' ', '').ToLowerInvariant() -eq $location.Replace(' ', '').ToLowerInvariant())
@@ -157,7 +155,7 @@ function ValidateLocation()
     }
     Write-Warning "$(Get-Date –f $timeStampFormat) - Location $location is not available for this subscription.  Specify different -Location";
     Write-Warning "$(Get-Date –f $timeStampFormat) - Available Locations:";
-    foreach ($loc in $locations)
+    foreach ($loc in $global:locations)
     {
         Write-Warning $loc
     }
@@ -170,10 +168,10 @@ function GetResourceGroup()
         [Parameter(Mandatory=$true,Position=0)] [string] $name,
         [Parameter(Mandatory=$true,Position=1)] [string] $type
     )
-    $resourceGroup = Find-AzureRmResourceGroup -Tag @{Name="IotSuiteType";Value=$type} | ?{$_.Name -eq $name}
+    $resourceGroup = Find-AzureRmResourceGroup -Tag @{"IotSuiteType" = $type} | ?{$_.Name -eq $name}
     if ($resourceGroup -eq $null)
     {
-        return New-AzureRmResourceGroup -Name $name -Location $global:AllocationRegion -Tag @{Name="IoTSuiteType";Value=$type}, @{Name="IoTSuiteVersion";Value=$global:version}, @{Name="IoTSuiteState";Value="Created"}
+        return New-AzureRmResourceGroup -Name $name -Location $global:AllocationRegion -Tag @{"IoTSuiteType" = $type ; "IoTSuiteVersion" = $global:version ; "IoTSuiteState" = "Created"}
     }
     else
     {
@@ -193,22 +191,19 @@ function UpdateResourceGroupState()
     {
         $tags = $resourceGroup.Tags
         $updated = $false
-        foreach ($tag in $tags)
+        if ($tags.ContainsKey("IoTSuiteState"))
         {
-            if ($tag.Name -eq "IoTSuiteState")
-            {
-                $tag.Value = $state
-                $updated = $true
-			}
-			if ($tag.Name -eq "IoTSuiteVersion" -and $tag.Value -ne $global:version)
-			{
-                $tag.Value = $global:version
-                $updated = $true
-			}
+            $tags.IoTSuiteState = $state
+            $updated = $true
+        }
+        if ($tags.ContainsKey("IoTSuiteVersion") -and $tags.IoTSuiteVersion -ne $global:version)
+        {
+            $tags.IoTSuiteVersion = $global:version
+            $updated = $true
         }
         if (!$updated)
         {
-            $tags += @{Name="IoTSuiteState";Value=$state}
+            $tags += @{"IoTSuiteState" = $state}
         }
         $resourceGroup = Set-AzureRmResourceGroup -Name $resourceGroupName -Tag $tags
     }
@@ -229,29 +224,34 @@ function ValidateResourceName()
     {
         "microsoft.devices/iothubs"
         {
-            $resourceUrl = "azure-devices.net"
+            $resourceUrl = $global:iotHubSuffix
         }
         "microsoft.storage/storageaccounts"
         {
-            $resourceUrl = "blob.core.windows.net"
+            $resourceUrl = "blob.{0}" -f $global:azureEnvironment.StorageEndpointSuffix
             $resourceBaseName = $resourceBaseName.Substring(0, [System.Math]::Min(19, $resourceBaseName.Length))
         }
         "microsoft.documentdb/databaseaccounts"
         {
-            $resourceUrl = "documents.azure.com"
+            # DocDB’s documentation says it allows 3-50 chars, but their actual
+            # length limit varies per-region (bug 846765). Restrict to 24 chars
+            # based on their dev’s recommendation, allowing for the 5-character
+            # random string appended by GetUniqueResourceName:
+            $resourceUrl = $global:docdbSuffix
+            $resourceBaseName = $resourceBaseName.Substring(0, [System.Math]::Min(24 - 5, $resourceBaseName.Length))
         }
         "microsoft.eventhub/namespaces"
         {
-            $resourceUrl = "servicebus.windows.net"
+            $resourceUrl = $global:eventhubSuffix
             $resourceBaseName = $resourceBaseName.Substring(0, [System.Math]::Min(35, $resourceBaseName.Length))
         }
         "microsoft.web/sites"
         {
-            $resourceUrl = "azurewebsites.net"
+            $resourceUrl = $global:websiteSuffix
         }
         default {}
     }
-    
+
     # Return name for existing resource if exists
     $resources = Find-AzureRmResource -ResourceGroupNameContains $resourceGroupName -ResourceType $resourceType -ResourceNameContains $resourceBaseName
     if ($resources -ne $null)
@@ -264,7 +264,7 @@ function ValidateResourceName()
             }
         }
     }
-    
+
     return GetUniqueResourceName $resourceBaseName $resourceUrl $cloudDeploy
 }
 
@@ -336,7 +336,7 @@ function GetAzureIotHubName()
     return ValidateResourceName $baseName Microsoft.Devices/iotHubs $resourceGroupName $cloudDeploy
 }
 
-function GetAzureServicebusName()
+function GetAzureEventhubName()
 {
     Param(
         [Parameter(Mandatory=$true,Position=0)] [string] $baseName,
@@ -351,7 +351,7 @@ function StopExistingStreamAnalyticsJobs()
     Param(
         [Parameter(Mandatory=$true,Position=0)] [string] $resourceGroupName
     )
-    $sasJobs = Find-AzureRmResource -ResourceGroupNameContains $resourceGroupName -ResourceType Microsoft.StreamAnalytics/streamingjobs
+    $sasJobs = Get-AzureRmResource -ResourceGroupName $resourceGroupName -ResourceType Microsoft.StreamAnalytics/streamingjobs
     if ($sasJobs -eq $null)
     {
         return $false
@@ -370,6 +370,7 @@ function StopExistingStreamAnalyticsJobs()
             }
         }
     }
+    Write-Host "$(Get-Date –f $timeStampFormat) - Stream Analytics jobs stopped"
     return $returnValue
 }
 
@@ -386,11 +387,13 @@ function UploadFile()
     $containerName = $containerName.ToLowerInvariant()
     $file = Get-Item -Path $filePath
     $fileName = $file.Name.ToLowerInvariant()
-    $storageAccountKey = (Get-AzureRmStorageAccountKey -StorageAccountName $storageAccountName -ResourceGroupName $resourceGroupName).Key1
+
+    $storageAccountKey = (Get-AzureRmStorageAccountKey -StorageAccountName $storageAccountName -ResourceGroupName $resourceGroupName).Value[0]
+
     $context = New-AzureStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $storageAccountKey
     if (!(HostEntryExists $context.StorageAccount.BlobEndpoint.Host))
     {
-        Write-Host "$(Get-Date –f $timeStampFormat) - Waiting for storage account url to resolve." -NoNewline
+        Write-Host "$(Get-Date –f $timeStampFormat) - Waiting for storage account $($context.StorageAccount.BlobEndpoint.Host) url to resolve." -NoNewline
         while (!(HostEntryExists $context.StorageAccount.BlobEndpoint.Host))
         {
             Write-Host "." -NoNewline
@@ -403,7 +406,7 @@ function UploadFile()
     $null = Set-AzureStorageBlobContent -Blob $fileName -Container $ContainerName -File $file.FullName -Context $context -Force
 
     # Generate Uri with sas token
-    $storageAccount = [Microsoft.WindowsAzure.Storage.CloudStorageAccount]::Parse(("DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1}" -f $storageAccountName, $storageAccountKey))
+    $storageAccount = [Microsoft.WindowsAzure.Storage.CloudStorageAccount]::Parse(("DefaultEndpointsProtocol=https;EndpointSuffix={0};AccountName={1};AccountKey={2}" -f $global:azureEnvironment.StorageEndpointSuffix, $storageAccountName, $storageAccountKey))
     $blobClient = $storageAccount.CreateCloudBlobClient()
     $container = $blobClient.GetContainerReference($containerName)
     Write-Host ("$(Get-Date –f $timeStampFormat) - Checking container '{0}'." -f $containerName) -NoNewline
@@ -534,34 +537,77 @@ function LoadAzureAssembly()
 
 function GetAzureAccountInfo()
 {
-    $account = Get-AzureAccount
-    
-    if ($account -eq $null)
+    $accounts = Get-AzureAccount
+
+    if ($accounts -eq $null)
     {
         Write-Host "Signing you into Azure..."
-        $account = Add-AzureAccount
+        $account = Add-AzureAccount -Environment $global:azureEnvironment.Name
     }
-    else 
+    else
     {
-        Write-Host "Signed into Azure already"
+        Write-Host "Signed into Azure already, select account"
+        $global:index = 0
+        $selectedIndex = -1
+        Write-Host (($accounts | Format-Table -Property @{name="Option";expression={$global:index;$global:index+=1}}, Id, Subscriptions -au | Out-String).Trim())
+        Write-Host (("{0}" -f $global:index).PadLeft(6) + " Use another account")
+        Write-Host
+        while ($true)
+        {
+            try
+            {
+                [int]$selectedIndex = Read-Host "Select an option from the above list"
+            }
+            catch
+            {
+                Write-Host "Must be a number"
+                continue
+            }
+
+            if ($selectedIndex -eq $accounts.length + 1)
+            {
+                $account = Add-AzureAccount -Environment $global:azureEnvironment.Name
+                break;
+            }
+
+            if ($selectedIndex -lt 1 -or $selectedIndex -gt $accounts.length)
+            {
+                continue
+            }
+
+            $account = $accounts[$selectedIndex - 1]
+            break;
+        }
     }
-    
-    $profilePath = Join-Path $PSScriptRoot "..\..\$($account.Id).user"
-    $rmProfileLoaded = $false
-    
+    return $account.Id
+}
+
+function ValidateLoginCredentials()
+{
+    # Validate Azure RDFE
+    $account = Get-AzureAccount -Name $global:AzureAccountName
+    if ($account -eq $null)
+    {
+        $account = Add-AzureAccount -Environment $global:azureEnvironment.Name
+    }
+    if ((Get-AzureSubscription -SubscriptionId ($account.Subscriptions -replace '(?:\r\n)',',').split(",")[0]) -eq $null)
+    {
+        Add-AzureAccount -Environment $global:azureEnvironment.Name | Out-Null
+    }
+
+    # Validate Azure RM
+    $profilePath = Join-Path $PSScriptRoot "..\..\$($global:AzureAccountName).user"
     if (test-path $profilePath) {
         Write-Host "Trying to use saved profile $($profilePath)"
-        $rmProfileLoaded = (Select-AzureRmProfile -Path $profilePath) -ne $null
+        $rmProfile = Import-AzureRmContext -Path $profilePath
+        $rmProfileLoaded = ($rmProfile -ne $null) -and ($rmProfile.Context -ne $null) -and ((Get-AzureRmSubscription) -ne $null)
     }
-    
+
     if ($rmProfileLoaded -ne $true) {
         Write-Host "Logging in"
-        Login-AzureRmAccount | Out-Null
-        Save-AzureRmProfile -Path $profilePath
+        Login-AzureRmAccount -EnvironmentName $global:azureEnvironment.Name | Out-Null
+        Save-AzureRmContext -Path $profilePath
     }
-    
-    $id = $account.Id
-    return $id
 }
 
 function HostEntryExists()
@@ -571,8 +617,7 @@ function HostEntryExists()
     )
     try
     {
-        $hostName = [Net.Dns]::GetHostEntry($hostName)
-        if ($hostName -ne $null)
+        if ([Net.Dns]::GetHostEntry($hostName) -ne $null)
         {
             Write-Verbose ("Found hostname: {0}" -f $hostName)
             return $true
@@ -641,7 +686,7 @@ function GetAADTenant()
     }
     if ($tenants.Count -eq 1)
     {
-        [string]$tenantId = $tenants[0].TenantId
+        [string]$tenantId = $tenants[0].Id
     }
     else
     {
@@ -651,9 +696,9 @@ function GetAADTenant()
         $index = 1
         foreach ($tenantObj in $tenants)
         {
-            $tenant = $tenantObj.TenantId
-            $uri = "https://graph.windows.net/{0}/me?api-version=1.6" -f $tenant
-            $authResult = GetAuthenticationResult $tenant $global:aadLoginUrl "https://graph.windows.net/" $global:AzureAccountName -Prompt "Auto"
+            $tenant = $tenantObj.Id
+            $uri = "{0}{1}/me?api-version=1.6" -f $global:azureEnvironment.GraphUrl, $tenant
+            $authResult = GetAuthenticationResult $tenant $global:azureEnvironment.ActiveDirectoryAuthority $global:azureEnvironment.GraphUrl $global:AzureAccountName -Prompt "Auto"
             $header = $authResult.CreateAuthorizationHeader()
             $result = Invoke-RestMethod -Method "GET" -Uri $uri -Headers @{"Authorization"=$header;"Content-Type"="application/json"}
             if ($result -ne $null)
@@ -680,13 +725,13 @@ function GetAADTenant()
                 Write-Host "Must be a number"
             }
         }
-        $tenantId = $tenants[$selectedIndex - 1].TenantId
+        $tenantId = $tenants[$selectedIndex - 1].Id
     }
-    
+
     # Configure Application
-    $uri = "https://graph.windows.net/{0}/applications?api-version=1.6" -f $tenantId
+    $uri = "{0}{1}/applications?api-version=1.6" -f $global:azureEnvironment.GraphUrl, $tenantId
     $searchUri = "{0}&`$filter=identifierUris/any(uri:uri%20eq%20'{1}{2}')" -f $uri, [System.Web.HttpUtility]::UrlEncode($global:site), $global:appName
-    $authResult = GetAuthenticationResult $tenantId $global:aadLoginUrl "https://graph.windows.net/" $global:AzureAccountName
+    $authResult = GetAuthenticationResult $tenantId $global:azureEnvironment.ActiveDirectoryAuthority $global:azureEnvironment.GraphUrl $global:AzureAccountName
     $header = $authResult.CreateAuthorizationHeader()
 
     # Check for application
@@ -708,8 +753,11 @@ function GetAADTenant()
         $applicationId = $result.value[0].appId
     }
 
+	$global:AADClientId = $applicationId
+	UpdateEnvSetting "AADClientId" $applicationId
+
     # Check for ServicePrincipal
-    $uri = "https://graph.windows.net/{0}/servicePrincipals?api-version=1.6" -f $tenantId
+    $uri = "{0}{1}/servicePrincipals?api-version=1.6" -f $global:azureEnvironment.GraphUrl, $tenantId
     $searchUri = "{0}&`$filter=appId%20eq%20'{1}'" -f $uri, $applicationId
     $result = Invoke-RestMethod -Method "GET" -Uri $searchUri -Headers @{"Authorization"=$header;"Content-Type"="application/json"}
     if ($result.value.Count -eq 0)
@@ -732,7 +780,7 @@ function GetAADTenant()
     }
 
     # Check for Assigned User
-    $uri = "https://graph.windows.net/{0}/users/{1}/appRoleAssignments?api-version=1.6" -f $tenantId, $authResult.UserInfo.UniqueId
+    $uri = "{0}{1}/users/{2}/appRoleAssignments?api-version=1.6" -f $global:azureEnvironment.GraphUrl, $tenantId, $authResult.UserInfo.UniqueId
     $result = Invoke-RestMethod -Method "GET" -Uri $uri -Headers @{"Authorization"=$header;"Content-Type"="application/json"}
     if (($result.value | ?{$_.ResourceId -eq $resourceId}) -eq $null)
     {
@@ -770,10 +818,35 @@ function InitializeEnvironment()
         throw "Failed to load dependent libraries"
     }
     $global:environmentName = $environmentName
-    $global:AzureAccountName = GetAzureAccountInfo
 
     # Validate environment variables
     $global:environmentSettingsFile = "{0}\..\..\{1}.config.user" -f $global:azurePath, $environmentName
+
+    if ($environmentName -eq "local" -and (Test-Path $global:environmentSettingsFile))
+    {
+        $title = "Existing local config"
+        $message = "Local config already exists in {0}.  How would you like to proceed?" -f $global:azureEnvironment.Name
+        $use = New-Object System.Management.Automation.Host.ChoiceDescription "&Use existing", `
+            "Use existing config in existing cloud"
+        $new = New-Object System.Management.Automation.Host.ChoiceDescription "&New", `
+            "Delete existing config and deploy to new cloud environment"
+        $save = New-Object System.Management.Automation.Host.ChoiceDescription "&Save and Create New", `
+            "Rename existing config and deploy to new cloud environment"
+        $options = [System.Management.Automation.Host.ChoiceDescription[]]($use, $new, $save)
+        $result = $Host.UI.PromptForChoice($title, $message, $options, 0)
+        switch ($result)
+        {
+            0 {}
+            1 {Remove-Item $global:environmentSettingsFile}
+            2 {
+                $newFileName = "{0}\..\..\{1}-{2}.config.user" -f $global:azurePath, $environmentName, (get-date -Format "yyyy-MM-dd")
+                Rename-Item $global:environmentSettingsFile $newFileName
+                Write-Host ("Existing config saved as {0}" -f $newFileName)
+            }
+        }
+
+    }
+
     if (!(Test-Path $global:environmentSettingsFile))
     {
         copy ("{0}\ConfigurationTemplate.config" -f $global:azurePath) $global:environmentSettingsFile
@@ -785,19 +858,23 @@ function InitializeEnvironment()
         $global:envSettingsXml = [xml](cat $global:environmentSettingsFile)
     }
 
+    $global:AzureAccountName = GetOrSetEnvSetting "AzureAccountName" "GetAzureAccountInfo"
+    ValidateLoginCredentials
+
     if ([string]::IsNullOrEmpty($global:SubscriptionId))
     {
-        $accounts = Get-AzureRmSubscription
         $global:SubscriptionId = GetEnvSetting "SubscriptionId"
-        
-        if ([string]::IsNullOrEmpty($global:SubscriptionId))
+
+        if ([string]::IsNullOrEmpty($global:SubscriptionId) -or $global:SubscriptionId -eq "not set" )
         {
+            $global:SubscriptionId = "not set"
+            $subscriptions = Get-AzureRMSubscription
             Write-Host "Available subscriptions:"
-                $global:index = 0
-                $selectedIndex = -1
-                $accounts | Format-Table -Property @{name="Option";expression={$global:index;$global:index+=1}},SubscriptionName, SubscriptionId -au
-            
-            while (!$accounts.SubscriptionId.Contains($global:SubscriptionId))
+            $global:index = 0
+            $selectedIndex = -1
+            Write-Host ($subscriptions | Format-Table -Property @{name="Option";expression={$global:index;$global:index+=1}},Name, Id -au | Out-String)
+
+            while (!$subscriptions.Id.Contains($global:SubscriptionId))
             {
                 try
                 {
@@ -808,19 +885,23 @@ function InitializeEnvironment()
                     Write-Host "Must be a number"
                     continue
                 }
-                
-                if ($selectedIndex -lt 1 -or $selectedIndex -gt $accounts.length)
+
+                if ($selectedIndex -lt 1 -or $selectedIndex -gt $subscriptions.length)
                 {
                     continue
                 }
-                
-                $global:SubscriptionId = $accounts[$selectedIndex - 1].SubscriptionId
+
+                $global:SubscriptionId = $subscriptions[$selectedIndex - 1].Id
             }
+
             UpdateEnvSetting "SubscriptionId" $global:SubscriptionId
         }
     }
-    
-    Select-AzureRmSubscription -SubscriptionId $global:SubscriptionId
+
+    Select-AzureSubscription -SubscriptionId $global:SubscriptionId
+
+	$rmSubscription = Get-AzureRmSubscription -SubscriptionId $global:SubscriptionId
+	Select-AzureRmSubscription -SubscriptionName $rmSubscription.Name -TenantId $rmSubscription.Tenant.Id
 
     if ([string]::IsNullOrEmpty($global:AllocationRegion))
     {
@@ -834,7 +915,11 @@ function InitializeEnvironment()
         $resourceGroup = Get-AzureRmResourceGroup -Name $environmentName -ErrorAction SilentlyContinue
         if ($resourceGroup -ne $null)
         {
-            $webResource = Get-AzureRmResource -ResourceType Microsoft.Web/sites -ResourceGroupName $environmentName -ResourceName $environmentName -ErrorAction SilentlyContinue
+            try
+            {
+                $webResource = Get-AzureRmResource -ResourceType Microsoft.Web/sites -ResourceGroupName $environmentName -ResourceName $environmentName -ErrorAction SilentlyContinue
+            }
+            catch {}
         }
         if ($webResource -eq $null)
         {
@@ -867,6 +952,29 @@ function FixWebJobZip()
     $zip.Dispose()
 }
 
+function ResourceObjectExists
+ {
+    Param(
+        [Parameter(Mandatory=$true,Position=0)] [string] $resourceGroupName,
+        [Parameter(Mandatory=$true,Position=1)] [string] $resourceName,
+        [Parameter(Mandatory=$true,Position=2)] [string] $type
+    )
+     return (GetResourceObject -resourceGroupName $resourceGroupName -resourceName $resourceName -type $type | ?{$_.Name -eq $resourceName}) -ne $null
+ }
+
+ function GetResourceObject
+ {
+    Param(
+         [Parameter(Mandatory=$true,Position=0)] [string] $resourceGroupName,
+         [Parameter(Mandatory=$true,Position=1)] [string] $resourceName,
+         [Parameter(Mandatory=$true,Position=2)] [string] $type
+    )
+
+    $azureRmResource = Get-AzureRmResource -ResourceName $resourceName -ResourceGroupName $resourceGroupName -ResourceType $type
+    # Write-Host ($azureRmResource | Format-List | Out-String)
+    return $azureRmResource
+ }
+
 # Variable initialization
 [int]$global:envSettingsChanges = 0;
 $global:timeStampFormat = "o"
@@ -874,13 +982,15 @@ $global:resourceNotFound = "ResourceNotFound"
 $global:serviceNameToken = "ServiceName"
 $global:azurePath = Split-Path $MyInvocation.MyCommand.Path
 $global:version = Get-Content ("{0}\..\..\VERSION.txt" -f $global:azurePath)
-$global:azureVersion = "1.0.3"
-$global:aadLoginUrl = "https://login.windows.net/"
-$global:locations = @("East US", "North Europe", "East Asia", "West US", "West Europe", "Southeast Asia")
+$global:azureVersion = "4.2.1"
 
 # Check version
 $module = Get-Module -ListAvailable | Where-Object{ $_.Name -eq 'Azure' }
 $expected = New-Object System.Version($global:azureVersion)
+if($module -is [System.Array])
+{
+    $module = ($module | Sort-Object Version -Descending)[0]
+}
 $comparison = $expected.CompareTo($module.Version)
 
 if ($comparison -eq 1)
@@ -889,8 +999,11 @@ if ($comparison -eq 1)
 }
 elseif ($comparison -eq -1)
 {
-    Write-Warning "This script Azure Cmdlets was tested with $($global:azureVersion)"
-    Write-Warning "Found $($module.Version.Major).$($module.Version.Minor).$($module.Version.Build) installed; continuing, but errors might occur"
+    if ($module.Version.Major -ne $expected.Major -and $module.Version.Minor -ne $expected.Minor)
+    {
+        Write-Warning "This script Azure Cmdlets was tested with $($global:azureVersion)"
+        Write-Warning "Found $($module.Version.Major).$($module.Version.Minor).$($module.Version.Build) installed; continuing, but errors might occur"
+    }
 }
 
 # Load System.Web
@@ -898,22 +1011,3 @@ Add-Type -AssemblyName System.Web
 
 # Load System.IO.Compression.FileSystem
 Add-Type -AssemblyName  System.IO.Compression.FileSystem
-
-# Make sure Azure PowerShell modules are loaded
-if ((Get-Module | where {$_.Name -match "Azure"}) -eq $Null)
-{
-    $programFiles = ${Env:ProgramFiles(x86)}
-    if ($programFiles -eq $null)
-    {
-        $programFiles = ${Env:ProgramFiles}
-    }
-    $modulePath = "$programFiles\Microsoft SDKs\Azure\PowerShell\ServiceManagement\Azure\Azure.psd1"
-    if (Test-Path $modulePath)
-    {
-        Get-ChildItem $modulePath | Import-Module
-    }
-    else
-    {
-        throw "Unable to find Azure.psd1 modules. Please install Azure Powershell 2.5.1 or later"
-    }
-}

@@ -45,11 +45,13 @@
 
     var onResendCommandClicked = function() {
         var commandName = $(this).data('command-name');
+        var deliveryType = $(this).data('command-deliverytype');
         var commandJson = $(this).data('command-json');
 
         var command = {
             deviceId: resources.deviceId,
             name: commandName,
+            deliveryType: deliveryType,
             commandJson: JSON.stringify(commandJson)
         };
 
@@ -69,7 +71,7 @@
     }
 
     var resendCommand = function (command) {
-        return $.post('/DeviceCommand/ResendCommand', command);
+        return $.post(resources.resendCommand, command);
     }
 
     var setDatatable = function() {
@@ -84,13 +86,17 @@
             "oLanguage": {
                 "sInfo": "Devices List (_TOTAL_)"
             },
-            "order": [3, "desc"],
+            "order": [resources.sortColumnIndex, "desc"],
             "pageLength": 1000,
             "columnDefs": [
-                { "width": "200", "targets": 1 }
+                { "width": "200", "targets": 1 },
+                { className: "table_truncate_with_max_width", targets: [2, 3] }
             ]
         });
 
+        $('#content').show();
+
+        IoTApp.Helpers.String.setupTooltipForEllipsis($('#commandHistory'));
     }
 
 
@@ -300,7 +306,7 @@
             command: command
         }
         data["__RequestVerificationToken"] = $('input[name="__RequestVerificationToken"]').val();
-        return $.post('/DeviceCommand/Command', data, function (response) {
+        return $.post(resources.commandUI, data, function (response) {
             return response;
         });
     }

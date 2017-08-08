@@ -26,6 +26,10 @@
         HealthBeat,
         LogicApps,
         CellularConn,
-        EditResinConfig
+        EditResinConfig,
+        ViewJobs,
+        ManageJobs,
+        SaveDeviceListColumnsAsGlobal,
+        DeleteSuggestedClauses
     }
 }

@@ -11,6 +11,9 @@ using System.Web.Routing;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web
 {
+    using App_Start;
+    using Helpers;
+
     public class MvcApplication : System.Web.HttpApplication
     {
         protected void Application_Start()
@@ -22,6 +25,11 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web
             GlobalFilters.Filters.Add(new HandleErrorAttribute());
             AntiForgeryConfig.UniqueClaimTypeIdentifier = ClaimTypes.NameIdentifier;
             ControllerBuilder.Current.DefaultNamespaces.Add("Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.WebApiControllers");
+
+            // Reset JobList and QueryList via actual current job history for debugging
+            //RepositoryInitializer.SeedTablesAsync().Wait();
+            ModelBinders.Binders.Add(typeof(DateTime), new DateTimeBinder() { TimeFormat = "h:m:ss tt", DateFormat= "MMMM d, yyyy h:mm tt" });
+            ModelBinders.Binders.Add(typeof(DateTime?), new NullableDateTimeBinder() { TimeFormat = "h:m:ss tt", DateFormat = "MMMM d, yyyy h:mm tt" });
         }
 
         // Require HTTPS for all requests processed by ASP.NET
@@ -64,10 +72,26 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web
 
         private CultureInfo GetSelectedCulture()
         {
-            // Add custom logic here for getting a user-specified culture.
+            string cultureName;
 
-            // Default to server-selected one.
-            return CultureInfo.CurrentCulture;
+            // Attempt to read the culture cookie from Request
+            HttpCookie cultureCookie = this.Request.Cookies["_culture"];
+
+            if (cultureCookie != null)
+            {
+                cultureName = cultureCookie.Value;
+            }
+            else
+            {
+                // Obtain it from HTTP header AcceptLanguages
+                cultureName = this.Request.UserLanguages != null && this.Request.UserLanguages.Length > 0 ? this.Request.UserLanguages[0] : null;
+            }
+
+            // Validate culture name
+            var culture = CultureHelper.GetClosestCulture(cultureName);
+
+            // Modify current thread's cultures            
+            return culture;
         }
 
         private bool GetIsServiceCall(HttpContextWrapper contextWrapper)

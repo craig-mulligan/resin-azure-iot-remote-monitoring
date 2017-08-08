@@ -1,8 +1,4 @@
-﻿using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Models;
-using Microsoft.WindowsAzure.Storage.Blob;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -10,6 +6,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Models;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Repository
 {
@@ -27,8 +26,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
         private const string RULE_OUTPUT_COLUMN_NAME = "ruleoutput";
         private const string TIME_COLUMN_NAME = "time";
 
-        private readonly string alertsContainerConnectionString;
-        private readonly string alertsStoreContainerName;
+        private readonly IBlobStorageClient _blobStorageManager;
         private readonly string deviceAlertsDataPrefix;
 
         /// <summary>
@@ -38,16 +36,17 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
         /// The IConfigurationProvider implementation with which the new 
         /// instance will be initialized.
         /// </param>
-        public AlertsRepository(IConfigurationProvider configProvider)
+        public AlertsRepository(IConfigurationProvider configProvider, IBlobStorageClientFactory blobStorageClientFactory)
         {
             if (configProvider == null)
             {
                 throw new ArgumentNullException("configProvider");
             }
 
-            this.alertsContainerConnectionString = configProvider.GetConfigurationSettingValue("device.StorageConnectionString");
-            this.alertsStoreContainerName = configProvider.GetConfigurationSettingValue("AlertsStoreContainerName");
-            this.deviceAlertsDataPrefix =configProvider.GetConfigurationSettingValue("DeviceAlertsDataPrefix");
+            string alertsContainerConnectionString = configProvider.GetConfigurationSettingValue("device.StorageConnectionString");
+            string alertsStoreContainerName = configProvider.GetConfigurationSettingValue("AlertsStoreContainerName");
+            this._blobStorageManager = blobStorageClientFactory.CreateClient(alertsContainerConnectionString, alertsStoreContainerName);
+            this.deviceAlertsDataPrefix = configProvider.GetConfigurationSettingValue("DeviceAlertsDataPrefix");
         }
 
         /// <summary>
@@ -74,24 +73,14 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
 
             var filteredResult = new List<AlertHistoryItemModel>();
             var unfilteredResult = new List<AlertHistoryItemModel>();
-
-            IEnumerable<IListBlobItem> blobs = await LoadApplicableListBlobItemsAsync();
-
-            foreach (IListBlobItem blob in blobs)
+            var alertBlobReader = await _blobStorageManager.GetReader(deviceAlertsDataPrefix);
+            foreach (var alertStream in alertBlobReader)
             {
-                CloudBlockBlob blockBlob = blob as CloudBlockBlob;
-                if (blockBlob == null)
-                {
-                    continue;
-                }
+                var segment = ProduceAlertHistoryItemsAsync(alertStream.Data);
+                IEnumerable<AlertHistoryItemModel> filteredSegment = segment.Where(t => t?.Timestamp != null && (t.Timestamp.Value > minTime));
 
-                IEnumerable<AlertHistoryItemModel> segment = await ProduceAlertHistoryItemsAsync(blockBlob);
-
-                IEnumerable<AlertHistoryItemModel> filteredSegment = segment.Where(
-                        t => (t != null) && t.Timestamp.HasValue && (t.Timestamp.Value > minTime));
-
-                int unfilteredCount = segment.Count();
-                int filteredCount = filteredSegment.Count();
+                var unfilteredCount = segment.Count();
+                var filteredCount = filteredSegment.Count();
 
                 unfilteredResult.AddRange(segment.OrderByDescending(t => t.Timestamp));
                 filteredResult.AddRange(filteredSegment.OrderByDescending(t => t.Timestamp));
@@ -137,12 +126,6 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                         true,
                         false) as string;
 
-            var thresholdValue = ReflectionHelper.GetNamedPropertyValue(
-                        expandoObject,
-                        THRESHOLD_VALUE_COLUMN_NAME,
-                        true,
-                        false) as string;
-
             var ruleOutput = ReflectionHelper.GetNamedPropertyValue(
                         expandoObject,
                         RULE_OUTPUT_COLUMN_NAME,
@@ -155,20 +138,17 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                         true,
                         false) as string;
 
-            return BuildModelForItem(ruleOutput, deviceId, readingValue, thresholdValue, time);
+            return BuildModelForItem(ruleOutput, deviceId, readingValue, time);
         }
 
-        private static AlertHistoryItemModel BuildModelForItem(string ruleOutput, string deviceId, string value, string threshold, string time)
+        private static AlertHistoryItemModel BuildModelForItem(string ruleOutput, string deviceId, string value, string time)
         {
             double valDouble;
-            double threshDouble;
             DateTime timeAsDateTime;
 
             if (!string.IsNullOrWhiteSpace(value) &&
-                !string.IsNullOrWhiteSpace(threshold) &&
                 !string.IsNullOrWhiteSpace(deviceId) &&
                 double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out valDouble) &&
-                double.TryParse(threshold, NumberStyles.Float, CultureInfo.InvariantCulture, out threshDouble) &&
                 DateTime.TryParse(time, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out timeAsDateTime))
             {
                 return new AlertHistoryItemModel()
@@ -183,75 +163,34 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
             return null;
         }
 
-        private async static Task<List<AlertHistoryItemModel>> ProduceAlertHistoryItemsAsync(CloudBlockBlob blob)
+        private static List<AlertHistoryItemModel> ProduceAlertHistoryItemsAsync(Stream stream)
         {
-            Debug.Assert(blob != null, "blob is a null reference.");
+            Debug.Assert(stream != null, "stream is a null reference.");
 
             var models = new List<AlertHistoryItemModel>();
-            var stream = new MemoryStream();
-            TextReader reader = null;
+
             try
             {
-                await blob.DownloadToStreamAsync(stream);
                 stream.Position = 0;
-                reader = new StreamReader(stream);
-
-                IEnumerable<ExpandoObject> expandos = ParsingHelper.ParseCsv(reader).ToExpandoObjects();
-                foreach (ExpandoObject expando in expandos)
+                using (var reader = new StreamReader(stream))
                 {
-                    AlertHistoryItemModel model = ProduceAlertHistoryItem(expando);
-
-                    if (model != null)
+                    IEnumerable<ExpandoObject> expandos = ParsingHelper.ParseCsv(reader).ToExpandoObjects();
+                    foreach (ExpandoObject expando in expandos)
                     {
-                        models.Add(model);
+                        AlertHistoryItemModel model = ProduceAlertHistoryItem(expando);
+
+                        if (model != null)
+                        {
+                            models.Add(model);
+                        }
                     }
                 }
             }
             finally
             {
-                IDisposable dispStream = stream as IDisposable;
-                if (dispStream != null)
-                {
-                    dispStream.Dispose();
-                }
-
-                IDisposable dispReader = reader as IDisposable;
-                if (dispReader != null)
-                {
-                    dispReader.Dispose();
-                }
             }
 
             return models;
-        }
-
-        private async Task<IEnumerable<IListBlobItem>> LoadApplicableListBlobItemsAsync()
-        {
-            CloudBlobContainer container =
-                await BlobStorageHelper.BuildBlobContainerAsync(
-                    this.alertsContainerConnectionString,
-                    this.alertsStoreContainerName);
-
-            IEnumerable<IListBlobItem> blobs =
-                await BlobStorageHelper.LoadBlobItemsAsync(
-                    async (token) =>
-                    {
-                        return await container.ListBlobsSegmentedAsync(
-                            this.deviceAlertsDataPrefix,
-                            true,
-                            BlobListingDetails.None,
-                            null,
-                            token,
-                            null,
-                            null);
-                    });
-
-            if (blobs != null)
-            {
-                blobs = blobs.OrderByDescending(t => BlobStorageHelper.ExtractBlobItemDate(t));
-                    }
-
-            return blobs;
         }
     }
 }

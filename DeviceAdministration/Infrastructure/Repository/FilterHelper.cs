@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.DeviceSchema;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Exceptions;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Models;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Models;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infrastructure.Repository
@@ -11,31 +11,31 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
     /// <summary>
     /// Testable logic for filtering devices in DocDB
     /// </summary>
-    internal static class FilterHelper
+    public static class FilterHelper
     {
         /// <summary>
         /// Filters the device list with the supplied filters
         /// </summary>
         /// <param name="list">Devices to filter</param>
-        /// <param name="filters">Filters to apply</param>
+        /// <param name="clauses">Clauses to apply</param>
         /// <returns>Set of devices that pass all the filters</returns>
-        public static IQueryable<dynamic> FilterDeviceList(
-            IQueryable<dynamic> list, 
-            List<FilterInfo> filters)
+        public static IQueryable<DeviceModel> FilterDeviceList(
+            IQueryable<DeviceModel> list,
+            List<Clause> clauses)
         {
             if (list == null)
             {
                 throw new ArgumentNullException("list");
             }
 
-            if (filters == null)
+            if (clauses == null)
             {
                 return list;
             }
 
             list = list.Where(GetIsNotNull).AsQueryable();
 
-            foreach (var f in filters)
+            foreach (var f in clauses)
             {
                 if ((f != null) && !string.IsNullOrEmpty(f.ColumnName))
                 {
@@ -46,9 +46,9 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
             return list;
         }
 
-        private static IQueryable<dynamic> FilterItems(
-            IQueryable<dynamic> list, 
-            FilterInfo filter)
+        private static IQueryable<DeviceModel> FilterItems(
+            IQueryable<DeviceModel> list,
+            Clause filter)
         {
             if (list == null)
             {
@@ -67,44 +67,35 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                     "filter");
             }
 
-            Func<dynamic, dynamic> getValue =
-                ReflectionHelper.ProducePropertyValueExtractor(
-                    filter.ColumnName, 
-                    false, 
+            Func<DeviceProperties, dynamic> getValue = ReflectionHelper.ProducePropertyValueExtractor(
+                    filter.ColumnName,
+                    false,
                     false);
 
-            Func<dynamic, bool> applyFilter =
-                (item) =>
+            Func<DeviceModel, bool> applyFilter = (item) =>
+            {
+                if (item == null)
                 {
-                    dynamic columnValue;
-                    dynamic deviceProperties;
+                    throw new ArgumentNullException("item");
+                }
 
-                    if (item == null)
-                    {
-                        throw new ArgumentNullException("item");
-                    }
+                if ((filter.ClauseType == ClauseType.Status) ||
+                    string.Equals(
+                        filter.ColumnName,
+                        "Status",
+                        StringComparison.CurrentCultureIgnoreCase))
+                {
+                    return GetValueMatchesStatus(item, filter.ClauseValue);
+                }
 
-                    if ((filter.FilterType == FilterType.Status) ||
-                        string.Equals(
-                            filter.ColumnName,
-                            "Status",
-                            StringComparison.CurrentCultureIgnoreCase))
-                    {
-                        return GetValueMatchesStatus(item, filter.FilterValue);
-                    }
+                if (item.DeviceProperties == null)
+                {
+                    return false;
+                }
 
-                    try
-                    {
-                        deviceProperties = DeviceSchemaHelper.GetDeviceProperties(item);
-                    }
-                    catch (DeviceRequiredPropertyNotFoundException)
-                    {
-                        return false;
-                    }
-
-                    columnValue = getValue(deviceProperties);
-                    return GetValueSatisfiesFilter(columnValue, filter);
-                };
+                dynamic columnValue = getValue(item.DeviceProperties);
+                return GetValueSatisfiesFilter(columnValue, filter);
+            };
 
             return list.Where(applyFilter).AsQueryable();
         }
@@ -114,7 +105,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
             return item != null;
         }
 
-        private static bool GetValueMatchesStatus(dynamic item, string statusName)
+        private static bool GetValueMatchesStatus(DeviceModel item, string statusName)
         {
             if (item == null)
             {
@@ -126,27 +117,19 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                 return false;
             }
 
-            string normalizedStatus = statusName.ToUpperInvariant();
-            bool? value;
-            try
-            {
-                value = DeviceSchemaHelper.GetHubEnabledState(item);
-            }
-            catch (DeviceRequiredPropertyNotFoundException)
-            {
-                value = null;
-            }
+            var normalizedStatus = statusName.ToUpperInvariant();
+            var enabledState = item.DeviceProperties?.HubEnabledState == null ? (bool?) null : item.DeviceProperties.GetHubEnabledState();
 
             switch (normalizedStatus)
             {
                 case "RUNNING":
-                    return value == true;
+                    return enabledState == true;
 
                 case "DISABLED":
-                    return value == false;
+                    return enabledState == false;
 
                 case "PENDING":
-                    return !value.HasValue;
+                    return !enabledState.HasValue;
 
                 default:
                     throw new ArgumentOutOfRangeException("statusName", statusName, "statusName has an unhandled status value.");
@@ -155,7 +138,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
 
         private static bool GetValueSatisfiesFilter(
             dynamic value,
-            FilterInfo filterInfo)
+            Clause filterInfo)
         {
             string strVal;
 
@@ -168,26 +151,26 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Infr
                 strVal = value.ToString();
             }
 
-            string match = filterInfo.FilterValue ?? string.Empty;
+            string match = filterInfo.ClauseValue ?? string.Empty;
 
-            switch (filterInfo.FilterType)
+            switch (filterInfo.ClauseType)
             {
-                case FilterType.ContainsCaseInsensitive:
+                case ClauseType.ContainsCaseInsensitive:
                     return strVal.IndexOf(match, StringComparison.CurrentCultureIgnoreCase) >= 0;
 
-                case FilterType.ContainsCaseSensitive:
+                case ClauseType.ContainsCaseSensitive:
                     return strVal.IndexOf(match, StringComparison.CurrentCulture) >= 0;
 
-                case FilterType.ExactMatchCaseInsensitive:
+                case ClauseType.ExactMatchCaseInsensitive:
                     return string.Equals(strVal, match, StringComparison.CurrentCultureIgnoreCase);
 
-                case FilterType.ExactMatchCaseSensitive:
+                case ClauseType.ExactMatchCaseSensitive:
                     return string.Equals(strVal, match, StringComparison.CurrentCulture);
 
-                case FilterType.StartsWithCaseInsensitive:
+                case ClauseType.StartsWithCaseInsensitive:
                     return strVal.StartsWith(match, StringComparison.CurrentCultureIgnoreCase);
 
-                case FilterType.StartsWithCaseSensitive:
+                case ClauseType.StartsWithCaseSensitive:
                     return strVal.StartsWith(match, StringComparison.CurrentCulture);
             }
 

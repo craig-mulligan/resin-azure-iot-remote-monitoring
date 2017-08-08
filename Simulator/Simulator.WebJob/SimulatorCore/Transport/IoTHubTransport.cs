@@ -1,14 +1,15 @@
-﻿using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.DeviceSchema;
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Configurations;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Devices;
 using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Logging;
-using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Serialization;
 using Microsoft.Azure.Devices.Client;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Threading.Tasks;
+using Microsoft.Azure.Devices.Shared;
+using Newtonsoft.Json;
 
 namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob.SimulatorCore.Transport
 {
@@ -17,29 +18,32 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
     /// </summary>
     public class IoTHubTransport : ITransport
     {
-        private readonly ISerialize _serializer;
         private readonly ILogger _logger;
         private readonly IConfigurationProvider _configurationProvider;
         private readonly IDevice _device;
         private DeviceClient _deviceClient;
         private bool _disposed = false;
 
-        public IoTHubTransport(ISerialize serializer, ILogger logger, IConfigurationProvider configurationProvider, IDevice device)
+        public IoTHubTransport(ILogger logger, IConfigurationProvider configurationProvider, IDevice device)
         {
-            _serializer = serializer;
             _logger = logger;
             _configurationProvider = configurationProvider;
             _device = device;
         }
 
-        public void Open()
+        public async Task OpenAsync()
         {
             if (string.IsNullOrWhiteSpace(_device.DeviceID))
             {
                 throw new ArgumentException("DeviceID value cannot be missing, null, or whitespace");
             }
 
-            _deviceClient = DeviceClient.CreateFromConnectionString(GetConnectionString());
+            var websiteHostName = Environment.GetEnvironmentVariable("WEBSITE_HOSTNAME");
+            var transportType = websiteHostName == null ? Client.TransportType.Mqtt : Client.TransportType.Mqtt_WebSocket_Only;
+            _deviceClient = DeviceClient.CreateFromConnectionString(GetConnectionString(), transportType);
+            await _deviceClient.OpenAsync();
+
+            _logger.LogInfo($"Transport opened for device {_device.DeviceID} with type {transportType}");
         }
 
         public async Task CloseAsync()
@@ -84,7 +88,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
         public async Task SendEventAsync(Guid eventId, dynamic eventData)
         {
             byte[] bytes;
-            string objectType = EventSchemaHelper.GetObjectType(eventData);
+            string objectType = this.GetObjectType(eventData);
             var objectTypePrefix = _configurationProvider.GetConfigurationSettingValue("ObjectTypePrefix");
 
             if (!string.IsNullOrWhiteSpace(objectType) && !string.IsNullOrEmpty(objectTypePrefix))
@@ -96,7 +100,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
             //string rawJson = JsonConvert.SerializeObject(eventData);
             //Trace.TraceInformation(rawJson);
 
-            bytes = _serializer.SerializeObject(eventData);
+            bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(eventData));
 
             var message = new Client.Message(bytes);
             message.Properties["EventId"] = eventId.ToString();
@@ -109,12 +113,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(
-                        "{0}{0}*** Exception: SendEventAsync ***{0}{0}EventId: {1}{0}Event Data: {2}{0}Exception: {3}{0}{0}",
-                        Console.Out.NewLine,
-                        eventId,
-                        eventData,
-                        ex);
+                    _logger.LogError($"SendEventAsync failed, device: {_device.DeviceID}, exception: {ex.Message}");
                 }
             });
         }
@@ -134,39 +133,20 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
             Client.Message message = await AzureRetryHelper.OperationWithBasicRetryAsync(
                 async () =>
                 {
-                    Exception exp;
-                    Client.Message msg;
-
-                    exp = null;
-                    msg = null;
                     try
                     {
-                        msg = await _deviceClient.ReceiveAsync();
+                        return await _deviceClient.ReceiveAsync();
                     }
-                    catch (Exception exception)
+                    catch (Exception ex)
                     {
-                        exp = exception;
+                        _logger.LogError($"ReceiveAsync failed, device: {_device.DeviceID}, exception: {ex.Message}");
+                        return null;
                     }
-
-                    if (exp != null)
-                    {
-                        _logger.LogError(
-                            "{0}{0}*** Exception: ReceiveAsync ***{0}{0}{1}{0}{0}",
-                            Console.Out.NewLine,
-                            exp);
-
-                        if (msg != null)
-                        {
-                            await _deviceClient.AbandonAsync(msg);
-                        }
-                    }
-
-                    return msg;
                 });
 
             if (message != null)
             {
-                return new DeserializableCommand(message, _serializer);
+                return new DeserializableCommand(message);
             }
 
             return null;
@@ -192,12 +172,7 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(
-                            "{0}{0}*** Exception: Abandon Command ***{0}{0}Command Name: {1}{0}Command: {2}{0}Exception: {3}{0}{0}",
-                            Console.Out.NewLine,
-                            command.CommandName,
-                            command.Command,
-                            ex);
+                        _logger.LogError($"Abandon Command failed, device: {_device.DeviceID}, exception: {ex.Message}");
                     }
                 });
         }
@@ -222,15 +197,10 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(
-                            "{0}{0}*** Exception: Complete Command ***{0}{0}Command Name: {1}{0}Command: {2}{0}Exception: {3}{0}{0}",
-                            Console.Out.NewLine,
-                            command.CommandName,
-                            command.Command,
-                            ex);
+                        _logger.LogError($"Complete Command failed, device: {_device.DeviceID}, exception: {ex.Message}");
                     }
                 });
-            }
+        }
 
         public async Task SignalRejectedCommand(DeserializableCommand command)
         {
@@ -252,14 +222,43 @@ namespace Microsoft.Azure.Devices.Applications.RemoteMonitoring.Simulator.WebJob
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(
-                            "{0}{0}*** Exception: Reject Command ***{0}{0}Command Name: {1}{0}Command: {2}{0}Exception: {3}{0}{0}",
-                            Console.Out.NewLine,
-                            command.CommandName,
-                            command.Command,
-                            ex);
+                        _logger.LogError($"Reject Command failed, device: {_device.DeviceID}, exception: {ex.Message}");
                     }
                 });
+        }
+
+        private string GetObjectType(dynamic eventData)
+        {
+            if (eventData == null)
+            {
+                throw new ArgumentNullException("eventData");
+            }
+
+            var propertyInfo = eventData.GetType().GetProperty("ObjectType");
+            if (propertyInfo == null)
+                return "";
+            var value = propertyInfo.GetValue(eventData, null);
+            return value == null ? "" : value.ToString();
+        }
+
+        public async Task UpdateReportedPropertiesAsync(TwinCollection reportedProperties)
+        {
+            await _deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
+        }
+
+        public async Task<Twin> GetTwinAsync()
+        {
+            return await _deviceClient.GetTwinAsync();
+        }
+
+        public async Task SetMethodHandlerAsync(string methodName, MethodCallback callback)
+        {
+            await _deviceClient.SetMethodHandlerAsync(methodName, callback, null);
+        }
+
+        public void SetDesiredPropertyUpdateCallback(DesiredPropertyUpdateCallback callback)
+        {
+            _deviceClient.SetDesiredPropertyUpdateCallback(callback, null);
         }
 
         /// <summary>

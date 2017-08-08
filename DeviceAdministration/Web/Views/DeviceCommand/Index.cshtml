@@ -1,5 +1,4 @@
-﻿@using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.DeviceSchema
-@using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers
+﻿@using Microsoft.Azure.Devices.Applications.RemoteMonitoring.Common.Helpers
 @using Microsoft.Azure.Devices.Applications.RemoteMonitoring.DeviceAdmin.Web.Helpers
 @using GlobalResources
 @using Newtonsoft.Json
@@ -32,7 +31,7 @@
             Html.RenderPartial("_SendCommand", Model.SendCommandModel);
         }
 
-        <div class="command_container" id="content">
+        <div class="command_container display_none" id="content">
 
             <h3>@Strings.CommandHistory</h3>
 
@@ -94,7 +93,8 @@
                                     {
                                         <button class="button_base resend_command"
                                                 data-command-name="@commandName"
-                                                data-command-json="@CommandHistorySchemaHelper.GetCommandParametersAsJsonString(commandHistoryItem)">
+                                                data-command-deliverytype="@commandHistoryItem.DeliveryType"
+                                                data-command-json="@commandHistoryItem.GetParameterString()">
                                             @Strings.Resend
                                         </button>
                                     }
@@ -116,15 +116,18 @@
 
         var resources = {
             redirectToIndexUrl: '@Url.Action("Index", "Device")',
-            commands: '@Html.Raw(Model.CommandsJson)',
+            commands: '@Html.JavaScriptString(@Model.CommandsJson)',
             deviceId: '@Model.DeviceId',
             deviceIsEnabled: '@Model.DeviceIsEnabled.ToString().ToLower()',
-            commandError: '@Strings.CommandError',
-            commandSendError: '@Strings.CommandSendError',
-            resendCommandError: '@Strings.ResendCommandError'
+            commandError: '@Html.JavaScriptString(Strings.CommandError)',
+            commandSendError: '@Html.JavaScriptString(Strings.CommandSendError)',
+            resendCommandError: '@Html.JavaScriptString(Strings.ResendCommandError)',
+            sortColumnIndex: 3,
+            commandUI: '/DeviceCommand/Command',
+            resendCommand: '/DeviceCommand/ResendCommand'
         }
     </script>
 
     <script type="text/javascript" src="~/Scripts/jquery-dataTables-plugins.js"></script>
-    <script type="text/javascript" src="~/Scripts/Views/DeviceCommand/DeviceCommandIndex.js"></script>
+    <script type="text/javascript" src="~/Scripts/Views/DeviceCommand/DeviceCommandIndex.js?ver=@Constants.JSVersion"></script>
 }
